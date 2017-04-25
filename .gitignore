@@ -1,0 +1,10 @@
+# Ignore the config file
+config.json
+
+# Ignore compiled files
+*~
+*.pyc
+
+# Ignore directories
+.credentials
+.data
