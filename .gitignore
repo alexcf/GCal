@@ -5,6 +5,8 @@ config.json
 *~
 *.pyc
 
+myNotes.txt
+
 # Ignore directories
 .credentials
 .data

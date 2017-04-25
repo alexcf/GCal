@@ -29,7 +29,7 @@ import pytz
 
 # Global (module) namespace variables
 #redirect_uri = "http://showquerystring.000webhostapp.com/index.php" # Don't alter this or anything else!
-cfgFile = sys.path[0] + '/config.json'
+cfgFile = sys.path[0] + '/.data/config.json'
 configChanged = False
 newDevicesList = [] # This is a python list
 APPLICATION_NAME = 'Google Calendar API for Domoticz'
@@ -51,16 +51,6 @@ gCaldateStrFmt = '%Y-%m-%dT%H:%M:%S'
 
 
 def query_yes_no(question, default="no"):
-	"""
-	Ask a yes/no question via raw_input() and return their answer.
-
-	"question" is a string that is presented to the user.
-	"default" is the presumed answer if the user just hits <Enter>.
-		It must be "yes" (the default), "no" or None (meaning
-		an answer is required of the user).
-
-	The "answer" return value is True for "yes" or False for "no".
-	"""
 	valid = {"yes": True, "y": True, "ye": True,
 					 "no": False, "n": False}
 	if default is None:
@@ -100,6 +90,10 @@ def default_input(message, defaultVal):
 def create_config():
 	global cfg;cfg = {}
 	global configChanged
+
+	data_dir = os.path.join(sys.path[0], '.data')
+	if not os.path.exists(data_dir):
+		os.makedirs(data_dir)
 
 	import socket
 	s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
