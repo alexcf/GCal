@@ -36,7 +36,7 @@ newDevicesList = [] # This is a python list
 APPLICATION_NAME = 'Google Calendar API for Domoticz'
 
 SCOPES = 'https://www.googleapis.com/auth/calendar.readonly'
-VERSION = '0.0.1'
+VERSION = '0.0.2'
 MSG_ERROR = 'Error'
 MSG_INFO = 'Info'
 MSG_EXEC = 'Exec info'
@@ -269,7 +269,7 @@ def createConfigEntry():
 	entry['trippedEvent'] = None # Set by the device. The name of the currently tripped event (if tripped) or the next event (if not tripped)
 	entry['eventsToday'] = 0 # Set by the device. Gives a count of the number of events present in the calendar in the current (local time) 24 hrs. This will remain the same during the day.
 	entry['remainingEventsToday'] = 0 # Set by the device. Gives a count of the number of events remaining in the current day. This will start out equal to eventsToday and decrease as each event completes. When no more events remain it will be 0
-	entry['lastCheck'] = datetime.datetime.utcnow().strftime(dateStrFmt) # Set by the device. The date and time the script last checked the calendar
+	entry['lastCheck'] =  (datetime.datetime.now() - datetime.timedelta(days=10)).strftime(dateStrFmt) # Set by the device. The date and time the script last checked the calendar
 
 	entry['domoticzSwitchIdx'] = 0
 	entry['domoticzTextIdx'] = 0
@@ -576,7 +576,7 @@ def syncWithGoogle(c):
 	http = credentials.authorize(httplib2.Http())
 	service = discovery.build('calendar', 'v3', http=http)
 
-	logMessage = 'Getting the upcoming 10 events for calendar ' + c['calendarAddress']
+	logMessage = 'Getting events for calendar ' + c['calendarAddress']
 	logToDomoticz(MSG_INFO, logMessage)
 	if isVerbose: print logMessage
 
@@ -586,7 +586,7 @@ def syncWithGoogle(c):
 	events = eventsResult.get('items', [])
 
 	if not events:
-		if tty: print('No upcoming events found.')
+		if tty: print('No events found.')
 	for event in events:
 		start = event['start'].get('dateTime', event['start'].get('date'))
 		if tty: print(start, event['summary'])
