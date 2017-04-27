@@ -10,6 +10,7 @@
 # THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS`` AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import json
+import io
 import os
 import plistlib
 import requests
@@ -35,11 +36,11 @@ newDevicesList = [] # This is a python list
 APPLICATION_NAME = 'Google Calendar API for Domoticz'
 
 SCOPES = 'https://www.googleapis.com/auth/calendar.readonly'
-VERSION = '1.0.0'
+VERSION = '0.0.1'
 MSG_ERROR = 'Error'
 MSG_INFO = 'Info'
 MSG_EXEC = 'Exec info'
-CAL_NO_EVENTS = 'No events found today'
+CAL_NO_FUTURE_EVENTS = 'No future events found'
 tty = True if os.isatty(sys.stdin.fileno()) else False
 isDebug = False
 isVerbose = False
@@ -86,6 +87,15 @@ def default_input(message, defaultVal):
 		return raw_input( "%s [%s]:" % (message, defaultVal) ) or defaultVal
 	else:
 		return raw_input( "%s :" % (message) )
+
+def saveConfigFile():
+	global configChanged
+	with io.open(cfgFile, 'w', encoding='utf-8') as outfile:
+		my_json_str = json.dumps(cfg, ensure_ascii=False, indent=2, sort_keys=True)
+		if isinstance(my_json_str, str): # Python 2.x JSON module gives either Unicode or str depending on the contents of the object.
+			my_json_str = my_json_str.decode('utf-8')
+		outfile.write(my_json_str)
+		configChanged = False
 
 def create_config():
 	global cfg;cfg = {}
@@ -193,9 +203,7 @@ def create_config():
 		else:
 			print 'Can not find the newly created room plan.'
 			sys.exit(0)
-	with open(cfgFile, 'w') as outfile:
-		json.dump(cfg, outfile, indent=2, sort_keys=True, separators=(',', ':'))
-		configChanged = False
+	saveConfigFile()
 	return cfg
 
 def load_config():
@@ -207,10 +215,12 @@ def load_config():
 		if tty:
 			cfg = create_config()
 		else:
+			logMessage = 'Can not open the config file ' + cfgFile
+			logToDomoticz(MSG_ERROR, logMessage)
 			sys.exit(0)
 	except:
 		logMessage = 'Can not open the config file ' + cfgFile
-		print logMessage, sys.exc_info()[0]
+		if tty: print logMessage, sys.exc_info()[0]
 		sys.exit(0)
 	return cfg
 
@@ -221,19 +231,19 @@ def domoticzAPI(payload):
 										 auth=(cfg['domoticz']['httpBasicAuth']['userName'], cfg['domoticz']['httpBasicAuth']['passWord']), \
 										 params=payload)
 	except:
-		print('Can not open domoticz URL: \'' + cfg['domoticz']['protocol'] + '://' + cfg['domoticz']['hostName'] + ':' + \
+		if tty: print('Can not open domoticz URL: \'' + cfg['domoticz']['protocol'] + '://' + cfg['domoticz']['hostName'] + ':' + \
 										 str(cfg['domoticz']['portNumber']) + '/json.htm\'', sys.exc_info()[0])
 		sys.exit(0)
 	if r.status_code <> 200:
-		print 'Unexpected status code from Domoticz: ' + r.status_code
+		if tty: print 'Unexpected status code from Domoticz: ' + r.status_code
 		sys.exit(0)
 	try:
 		rJsonDecoded = r.json()
 	except:
-		print('Can\'t Json decode response from Domoticz.', sys.exc_info()[0])
+		if tty: print('Can\'t Json decode response from Domoticz.', sys.exc_info()[0])
 		sys.exit(0)
 	if rJsonDecoded['status'] <> 'OK':
-		print 'Unexpected response from Domoticz: ' + rJsonDecoded['status']
+		if tty: print 'Unexpected response from Domoticz: ' + rJsonDecoded['status']
 		sys.exit(0)
 	return rJsonDecoded
 
@@ -256,15 +266,20 @@ def createConfigEntry():
 	entry['enabled'] = False
 
 	entry['tripped'] = False # Set by the device. 0 if not tripped, 1 if tripped
-	entry['trippedEvent'] = None # Set by the device. The name of the currently tripped event
-	entry['nextEvent'] = None # Set by the device. The name of the next event that will trip the device or be active. If the event is tripped – this will be the same as gc_TrippedEvent
-	entry['nextEventTime'] =  datetime.datetime(1970, 1, 1, 0, 0, 0).strftime(dateStrFmt) # Set by the device. This is the time of the current or next event. The start and stop time are displayed including any allowance for gc_StartDelta and gc_endDelta
+	entry['trippedEvent'] = None # Set by the device. The name of the currently tripped event (if tripped) or the next event (if not tripped)
 	entry['eventsToday'] = 0 # Set by the device. Gives a count of the number of events present in the calendar in the current (local time) 24 hrs. This will remain the same during the day.
-	entry['remainingEventsToday'] = 0 # Set by the device. Gives a count of the number of events remaining in the current (local time) 24 hrs. This will start out equal to gc_EventsToday and decrease as each event completes. When no more events remain it will equal 0
+	entry['remainingEventsToday'] = 0 # Set by the device. Gives a count of the number of events remaining in the current day. This will start out equal to eventsToday and decrease as each event completes. When no more events remain it will be 0
 	entry['lastCheck'] = datetime.datetime.utcnow().strftime(dateStrFmt) # Set by the device. The date and time the script last checked the calendar
 
 	entry['domoticzSwitchIdx'] = 0
 	entry['domoticzTextIdx'] = 0
+
+	entry['shortName'] = ''
+	while len(entry['shortName']) < 1:
+		entry['shortName'] = default_input('Calendar short name (Any unique name that You wish to use for this calendar) ', '')
+		if len(entry['shortName']) < 1:
+			print 'That doesn\'t look like a valid short name'
+			print 'Please try again'
 
 	entry['oAuth2ClientCredentials'] = {}
 
@@ -356,8 +371,8 @@ def createConfigEntry():
 	if query_yes_no('Treat back-to-back events with the same name as one long event', 'yes'):
 		entry['retrip'] = True
 
-	domoSwitchDeviceName = 'GCal ' + entry['calendarAddress']
-	domoTextDeviceName = 'GCal Status ' + entry['calendarAddress']
+	domoSwitchDeviceName = 'GCal ' + entry['shortName']
+	domoTextDeviceName = 'GCal Status ' + entry['shortName']
 	if entry['startDelta'] != 0 or entry['endDelta'] != 0:
 		domoSwitchDeviceName = domoSwitchDeviceName + ' ('  + str(entry['startDelta']) + ':' + str(entry['endDelta']) + ')'
 		domoTextDeviceName = domoTextDeviceName + ' ('  + str(entry['startDelta']) + ':' + str(entry['endDelta']) + ')'
@@ -472,13 +487,13 @@ def updateDomoTextDevice(calendarEntry):
 
 	if not 'result' in r.keys():
 		errMess = 'Failure getting data for domoticz device idx: ' + str(calendarEntry['domoticzTextIdx'])
-		print errMess
+		if tty: print errMess
 		logToDomoticz(MSG_ERROR, errMess)
 		return
 
 	domoCompareValue = r['result'][0]['Data']
 	if calendarEntry['trippedEvent'] == None:
-		newValue = CAL_NO_EVENTS
+		newValue = CAL_NO_FUTURE_EVENTS
 	else:
 		newValue = calendarEntry['trippedEvent']
 
@@ -550,37 +565,42 @@ def syncWithGoogle(c):
 	cred_args = []
 	cred_args.append('--noauth_local_webserver')
 
+	timeMin = (datetime.datetime.utcnow() + datetime.timedelta(minutes=c['endDelta']) - datetime.timedelta(hours=24)) # Limit for historical events
+	timeMax = (datetime.datetime.utcnow() + datetime.timedelta(minutes=c['startDelta']) + datetime.timedelta(hours=24)) # Limit for future events
+	timeMin = timeMin.isoformat() + 'Z'
+	timeMax = timeMax.isoformat() + 'Z'
+	#print timeMin
+	#print timeMax
+
 	credentials = get_credentials(c, cred_args)
 	http = credentials.authorize(httplib2.Http())
 	service = discovery.build('calendar', 'v3', http=http)
-
-	now = datetime.datetime.utcnow().isoformat() + 'Z' # 'Z' indicates UTC time
 
 	logMessage = 'Getting the upcoming 10 events for calendar ' + c['calendarAddress']
 	logToDomoticz(MSG_INFO, logMessage)
 	if isVerbose: print logMessage
 
 	eventsResult = service.events().list(
-		calendarId=c['calendarAddress'], timeMin=now, maxResults=10, singleEvents=True,
+		calendarId=c['calendarAddress'], timeMin=timeMin, timeMax=timeMax, singleEvents=True,
 		orderBy='startTime').execute()
 	events = eventsResult.get('items', [])
 
-	"""
 	if not events:
-		print('No upcoming events found.')
+		if tty: print('No upcoming events found.')
 	for event in events:
 		start = event['start'].get('dateTime', event['start'].get('date'))
-		print(start, event['summary'])
-	"""
+		if tty: print(start, event['summary'])
 
 	data_dir = os.path.join(cfg['system']['tmpFolder'], 'GCalData')
 	if not os.path.exists(data_dir):
 		os.makedirs(data_dir)
 	data_path = os.path.join(data_dir, str(c['calendarAddress']) + '.json')
 
-	import io
-	with io.open(data_path, 'w') as f:
-		f.write(json.dumps(events, ensure_ascii=False, indent=4, sort_keys=True))
+	with io.open(data_path, 'w', encoding='utf-8') as outfile:
+		my_json_str = json.dumps(events, ensure_ascii=False, indent=2, sort_keys=True)
+		if isinstance(my_json_str, str): # Python 2.x JSON module gives either Unicode or str depending on the contents of the object.
+			my_json_str = my_json_str.decode('utf-8')
+		outfile.write(my_json_str)
 
 	# Copy the calendar json data to remote host if applicable
 	# SSH public-key authentication to connect to a remote system must have been established prior to using
@@ -589,7 +609,7 @@ def syncWithGoogle(c):
 		cmd = 'ssh ' + cfg['domoticz']['scpHost'] + ' mkdir -p ' + cfg['domoticz']['scpDir']
 		call(cmd.split(" "))
 		cmd = 'scp ' + data_path + ' ' + cfg['domoticz']['scpHost'] + ':' + cfg['domoticz']['scpDir']
-		print cmd
+		if isVerbose: print cmd
 		call(cmd.split(" "))
 
 def load_calendar(c):
@@ -600,7 +620,7 @@ def load_calendar(c):
 			events = json.load(json_calendar_file)
 	except:
 		logMessage = 'Can not open the calendar file ' + data_path
-		print logMessage, sys.exc_info()[0]
+		if tty: print logMessage, sys.exc_info()[0]
 		sys.exit(0)
 	return events
 
@@ -617,12 +637,16 @@ def process_calendar(c):
 	utcTime = utcTime.replace(tzinfo=pytz.UTC) #replace method, convert the naive object into a zone aware object
 	domoticzNow= utcTime.astimezone(tz)
 
-	c['eventsToday'] = 0
-	c['remainingEventsToday'] = 0
-	c['tripped'] = False
-	c['trippedEvent'] = None
-	activeEvent = CAL_NO_EVENTS
+	eventsToday = 0
+	remainingEventsToday = 0
+	tripped = False
+	trippedEvent = None
+
+	activeEvent = CAL_NO_FUTURE_EVENTS
 	withinEvent = False
+	format1 = ''
+	format2 = ''
+	eventTimeText = ''
 
 	for e in events:
 		if 'date' in e['start'] and not c['ignoreAllDayEvent'] : # An all day event found
@@ -632,30 +656,75 @@ def process_calendar(c):
 			startDateTime = parser.parse(e['start']['dateTime'])
 			endDateTime = parser.parse(e['end']['dateTime'])
 
-		if domoticzNow.date() == startDateTime.date() or domoticzNow.date() == endDateTime.date():
-			# TODO: Ska vi subtrahera en minut från sluttiden för att inte spilla över på nästkommande dag?
-			print 'Event that happens today'
-			c['eventsToday'] = c['eventsToday'] + 1
-			if domoticzNow <= endDateTime:
-				c['remainingEventsToday'] = c['remainingEventsToday'] + 1
-			configChanged = True
+		# Deal with keyword filtering
+		if c['keyword'] != '':
+			keyWordFound = False
+			keyWordFound = e['summary'].find(c['keyword']) > 0
+			if not keyWordFound: keyWordFound = e['description'].find(c['keyword']) > 0
+			# print 'Keyword in use: ' + c['keyword'] + str(keyWordFound)
+			if (c['ignoreKeyword'] and keyWordFound) \
+			or (not c['ignoreKeyword'] and not keyWordFound):
+				#print 'rejects all the remaining statements for event: ' + e['summary']
+				continue # rejects all the remaining statements for this event
 
-		withinEvent = True if (domoticzNow >= startDateTime) and (domoticzNow <= endDateTime) else False
-		if withinEvent:
-			# TODO: 
-			activeEvent = '<B>' + e['summary'] + '</B><BR>' + str(startDateTime.hour) + ' to ' + str(endDateTime.hour)
-			print activeEvent + '\n'
-			c['tripped'] = True
-			c['trippedEvent'] = activeEvent
-			configChanged = True
-		# TODO: What if we have more active events?
-			"""
-                                                ("`-''-/").___..--''"`-._ 
-                                                `6_ 6  )   `-.  (     ).`-.__.`) 
-                                                (_Y_.)'  ._   )  `._ `. ``-..-`  
-                                               _..`--'_..-_/  /--'_.' ,'  
-                                             (il),-''  (li),'  ((!.-'
-			"""
+		# Deal with calendar time offsets
+		startDateTime = startDateTime + datetime.timedelta(minutes=c['startDelta'])
+		endDateTime = endDateTime + datetime.timedelta(minutes=c['endDelta'])
+
+		# Subtract 1 minute from endDateTime so that it will hold the last minute that the event is considered active
+		endDateTimeMinus1min = endDateTime - datetime.timedelta(seconds=60)
+
+		if domoticzNow.date() == startDateTime.date() or domoticzNow.date() == endDateTimeMinus1min.date():
+			eventsToday = eventsToday + 1
+			if domoticzNow <= endDateTimeMinus1min:
+				remainingEventsToday = remainingEventsToday + 1
+
+		if trippedEvent == None:
+			if startDateTime.hour == 0 and startDateTime.minute == 0 and endDateTime.hour == 0 and endDateTime.minute == 0:
+				eventTimeText = startDateTime.strftime('%Y-%m-%d. (All day event)')
+			else:
+				eventTimeText = startDateTime.strftime('%Y-%m-%d. From %H:%M') + ' to ' + endDateTime.strftime('%H:%M')
+
+			withinEvent = True if (domoticzNow >= startDateTime) and (domoticzNow <= endDateTimeMinus1min) else False
+			if withinEvent:
+				tripped = True
+				trippedEvent = e['summary']
+				# print trippedEvent # Causes serious error if running in background!!!! 
+				# TODO: What if we have more active events? How should they be handled? Now we are only using the first event found that we are within
+			elif (domoticzNow < startDateTime):
+				trippedEvent = e['summary']
+
+	#
+	#                                ("`-''-/").___..--''"`-._ 
+	#                                `6_ 6  )   `-.  (     ).`-.__.`) 
+	#                                (_Y_.)'  ._   )  `._ `. ``-..-`  
+	#                              _..`--'_..-_/  /--'_.' ,'  
+	#                             (il),-''  (li),'  ((!.-'
+	#
+
+	seqText = ' !#' + str(remainingEventsToday) + '(' + str(eventsToday) + ')' + '!#'
+	if trippedEvent == None:
+		trippedEvent = CAL_NO_FUTURE_EVENTS
+	if not tripped:
+		format1 = '<span style="color: grey;">' # Future events are shown in grey
+		format2 = '</span>'
+	trippedEvent = format1 + trippedEvent + format2 + seqText + '<BR/><span style="font-weight: normal;">' + eventTimeText + '</span>'
+
+	#if tripped:
+	#eventsToday == remainingEventsToday:
+	
+	#if tripped:
+
+
+	if eventsToday != c['eventsToday'] \
+	or remainingEventsToday != c['remainingEventsToday'] \
+	or tripped != c['tripped'] \
+	or trippedEvent != c['trippedEvent']:
+		configChanged = True
+		c['eventsToday'] = eventsToday
+		c['remainingEventsToday'] = remainingEventsToday
+		c['tripped'] = tripped
+		c['trippedEvent'] = trippedEvent
 	updateDomoTextDevice(c)
 	updateDomoSwitchDevice(c)
 
@@ -672,7 +741,7 @@ def list_calendars():
 			cfg = load_config()
 
 	logMessage = 'Found a total of : ' + str(len(cfg['calendars']['calendar'])) + ' calendar configuration entries.\n'
-	#logToDomoticz(MSG_INFO, logMessage)
+	if isVerbose: logToDomoticz(MSG_INFO, logMessage)
 	if isVerbose: print logMessage
 
 	for c in cfg['calendars']['calendar']:
@@ -680,21 +749,24 @@ def list_calendars():
 			elapsed = datetime.datetime.now() - datetime.datetime.strptime(c['lastCheck'], dateStrFmt)
 
 			if elapsed.seconds/60 >= c['interval']:
-				logMessage = 'Fetching Calendar : ' + c['calendarAddress'] + '. Last fetched: ' + str(elapsed.seconds/60) + ' minutes ago. Interval: ' +str(c['interval'])
+				logMessage = 'Fetching Calendar : ' + c['shortName'] + '. Last fetched: ' + str(elapsed.seconds/60) + ' minutes ago. Interval: ' +str(c['interval'])
 				logToDomoticz(MSG_INFO, logMessage)
-				if isVerbose: print logMessage
+				if tty: print logMessage
 				syncWithGoogle(c)
 				c['lastCheck'] = datetime.datetime.now().strftime(dateStrFmt)
 				configChanged = True
 			else:
-				logMessage = 'Skipping Calendar : ' + c['calendarAddress'] + '. Last fetched: ' + str(elapsed.seconds/60) + ' minutes ago. Interval: ' +str(c['interval'])
-				if isVerbose: print logMessage
+				if isVerbose:
+					logMessage = 'Skipping Calendar : ' + c['shortName'] + '. Last fetched: ' + str(elapsed.seconds/60) + ' minutes ago. Interval: ' +str(c['interval'])
+					logToDomoticz(MSG_INFO, logMessage)
+					print logMessage
 			process_calendar(c)
 
 	if configChanged:
-		with open(cfgFile, 'w') as outfile:
-			json.dump(cfg, outfile, indent=2, sort_keys=True, separators=(',', ':'))
-		configChanged = False
+		logMessage = 'Config changed... Needs to save'
+		if tty: print logMessage
+		if isVerbose: logToDomoticz(MSG_INFO, logMessage)
+		saveConfigFile()
 
 def print_help(argv):
 	print 'usage: ' + os.path.basename(__file__) + ' [option] [-C domoticzDeviceidx|all] \nOptions and arguments'
@@ -702,7 +774,7 @@ def print_help(argv):
 	print '-h		 : print this help message and exit (also --help)'
 	print '-v		 : verbose'
 	print '-V		 : print the version number and exit (also --version)'
-	print '-c		 : specify that your browser is on a different machine (also --create_gcal_entry)'
+	print '-c		 : create an additional GCal entry (also --create_gcal_entry)'
 
 def main(argv):
 	global isDebug
