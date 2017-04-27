@@ -777,6 +777,8 @@ def print_help(argv):
 	print '-c		 : create an additional GCal entry (also --create_gcal_entry)'
 
 def main(argv):
+	if os.geteuid() == 0:
+		sys.exit('\nThis script should not be run as user \'root\'\n')
 	global isDebug
 	global isVerbose
 
