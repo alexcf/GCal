@@ -36,7 +36,7 @@ newDevicesList = [] # This is a python list
 APPLICATION_NAME = 'Google Calendar API for Domoticz'
 
 SCOPES = 'https://www.googleapis.com/auth/calendar.readonly'
-VERSION = '0.0.5'
+VERSION = '0.0.6'
 MSG_ERROR = 'Error'
 MSG_INFO = 'Info'
 MSG_EXEC = 'Exec info'
@@ -743,10 +743,9 @@ def list_calendars():
 
 	for c in cfg['calendars']['calendar']:
 		if c['enabled']:
-			elapsed = datetime.datetime.now() - datetime.datetime.strptime(c['lastCheck'], dateStrFmt)
-
-			if elapsed.seconds/60 >= c['interval']:
-				logMessage = 'Fetching Calendar : ' + c['shortName'] + '. Last fetched: ' + str(elapsed.seconds/60) + ' minutes ago. Interval: ' +str(c['interval'])
+			elapsed = int((datetime.datetime.now() - datetime.datetime.strptime(c['lastCheck'], dateStrFmt)).total_seconds() / 60.0)
+			if elapsed >= c['interval']:
+				logMessage = 'Syncing Calendar data with Google: ' + c['shortName'] + '. Last fetched: ' + str(elapsed) + ' minutes ago. Interval: ' +str(c['interval'])
 				logToDomoticz(MSG_INFO, logMessage)
 				if tty: print logMessage
 				syncWithGoogle(c)
@@ -754,7 +753,7 @@ def list_calendars():
 				configChanged = True
 			else:
 				if isVerbose:
-					logMessage = 'Skipping Calendar : ' + c['shortName'] + '. Last fetched: ' + str(elapsed.seconds/60) + ' minutes ago. Interval: ' +str(c['interval'])
+					logMessage = 'Calendar data is up to date: ' + c['shortName'] + '. Last fetched: ' + str(elapsed) + ' minutes ago. Interval: ' +str(c['interval'])
 					logToDomoticz(MSG_INFO, logMessage)
 					print logMessage
 			process_calendar(c)
