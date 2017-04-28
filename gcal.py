@@ -36,7 +36,7 @@ newDevicesList = [] # This is a python list
 APPLICATION_NAME = 'Google Calendar API for Domoticz'
 
 SCOPES = 'https://www.googleapis.com/auth/calendar.readonly'
-VERSION = '0.0.4'
+VERSION = '0.0.5'
 MSG_ERROR = 'Error'
 MSG_INFO = 'Info'
 MSG_EXEC = 'Exec info'
@@ -661,8 +661,8 @@ def process_calendar(c):
 			keyWordFound = False
 			keyWords = c['keyword'].lower().split(';')
 			for keyWord in keyWords:
-				if not keyWordFound: keyWordFound = e['summary'].lower().find(keyWord) > 0
-				if not keyWordFound: keyWordFound = e['description'].lower().find(keyWord) > 0
+				if not keyWordFound and 'summary' in e: keyWordFound = e['summary'].lower().find(keyWord) > 0
+				if not keyWordFound and 'description' in e: keyWordFound = e['description'].lower().find(keyWord) > 0
 				#if keyWordFound: print(keyWord)
 
 			if (c['ignoreKeyword'] and keyWordFound) \
