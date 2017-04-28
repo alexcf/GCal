@@ -36,7 +36,7 @@ newDevicesList = [] # This is a python list
 APPLICATION_NAME = 'Google Calendar API for Domoticz'
 
 SCOPES = 'https://www.googleapis.com/auth/calendar.readonly'
-VERSION = '0.0.3'
+VERSION = '0.0.4'
 MSG_ERROR = 'Error'
 MSG_INFO = 'Info'
 MSG_EXEC = 'Exec info'
@@ -683,13 +683,12 @@ def process_calendar(c):
 				remainingEventsToday = remainingEventsToday + 1
 
 		if trippedEvent == None:
-			if startDateTime.hour == 0 and startDateTime.minute == 0 and endDateTime.hour == 0 and endDateTime.minute == 0:
-				eventTimeText = startDateTime.strftime('%Y-%m-%d. (All day event)')
-			else:
-				eventTimeText = startDateTime.strftime('%Y-%m-%d. From %H:%M') + ' to ' + endDateTime.strftime('%H:%M')
-
 			withinEvent = True if (domoticzNow >= startDateTime) and (domoticzNow <= endDateTimeMinus1min) else False
 			if withinEvent:
+				if startDateTime.hour == 0 and startDateTime.minute == 0 and endDateTime.hour == 0 and endDateTime.minute == 0:
+					eventTimeText = startDateTime.strftime('%Y-%m-%d. (All day event)')
+				else:
+					eventTimeText = startDateTime.strftime('%Y-%m-%d. From %H:%M') + ' to ' + endDateTime.strftime('%H:%M')
 				tripped = True
 				trippedEvent = e['summary']
 				# print trippedEvent # Causes serious error if running in background!!!! 
@@ -711,13 +710,8 @@ def process_calendar(c):
 	if not tripped:
 		format1 = '<span style="color: grey;">' # Future events are shown in grey
 		format2 = '</span>'
-	trippedEvent = format1 + trippedEvent + format2 + seqText + '<BR/><span style="font-weight: normal;">' + eventTimeText + '</span>'
-
-	#if tripped:
-	#eventsToday == remainingEventsToday:
-	
-	#if tripped:
-
+	trippedEvent = format1 + trippedEvent + ' ' + seqText + format2
+	if tripped: trippedEvent = trippedEvent + '<BR/><span style="font-weight: normal;">' + eventTimeText + '</span>'
 
 	if eventsToday != c['eventsToday'] \
 	or remainingEventsToday != c['remainingEventsToday'] \
