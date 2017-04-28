@@ -36,7 +36,7 @@ newDevicesList = [] # This is a python list
 APPLICATION_NAME = 'Google Calendar API for Domoticz'
 
 SCOPES = 'https://www.googleapis.com/auth/calendar.readonly'
-VERSION = '0.0.2'
+VERSION = '0.0.3'
 MSG_ERROR = 'Error'
 MSG_INFO = 'Info'
 MSG_EXEC = 'Exec info'
@@ -310,13 +310,13 @@ def createConfigEntry():
 	# This is the maximum amount of time in minutes between refreshes of the calendar.
 	entry['interval'] = 0
 	while entry['interval'] < 5 or entry['interval'] > 60*24:
-		entry['interval'] = default_input('Number of minutes between refreshes of the calendar (5-1440)', '180')
+		entry['interval'] = default_input('Number of minutes between refreshes of the calendar (5-10080)', '180')
 		try:
 			entry['interval'] = int(entry['interval'])
 		except ValueError:
 			entry['interval'] = 0
 			pass
-		if entry['interval'] < 5 or entry['interval'] > 60*24:
+		if entry['interval'] < 5 or entry['interval'] > 60*24*7:
 			print 'That doesn\'t look like a valid value'
 			print 'Please try again'
 
@@ -567,10 +567,9 @@ def syncWithGoogle(c):
 
 	timeMin = (datetime.datetime.utcnow() + datetime.timedelta(minutes=c['endDelta']) - datetime.timedelta(hours=24)) # Limit for historical events
 	timeMax = (datetime.datetime.utcnow() + datetime.timedelta(minutes=c['startDelta']) + datetime.timedelta(hours=24)) # Limit for future events
+	timeMax = timeMax + datetime.timedelta(minutes=c['interval']) # Add the update interval to timeMax
 	timeMin = timeMin.isoformat() + 'Z'
 	timeMax = timeMax.isoformat() + 'Z'
-	#print timeMin
-	#print timeMax
 
 	credentials = get_credentials(c, cred_args)
 	http = credentials.authorize(httplib2.Http())
@@ -658,13 +657,17 @@ def process_calendar(c):
 
 		# Deal with keyword filtering
 		if c['keyword'] != '':
+			#print 'Keywords in use: ' + c['keyword']
 			keyWordFound = False
-			keyWordFound = e['summary'].find(c['keyword']) > 0
-			if not keyWordFound: keyWordFound = e['description'].find(c['keyword']) > 0
-			# print 'Keyword in use: ' + c['keyword'] + str(keyWordFound)
+			keyWords = c['keyword'].lower().split(';')
+			for keyWord in keyWords:
+				if not keyWordFound: keyWordFound = e['summary'].lower().find(keyWord) > 0
+				if not keyWordFound: keyWordFound = e['description'].lower().find(keyWord) > 0
+				#if keyWordFound: print(keyWord)
+
 			if (c['ignoreKeyword'] and keyWordFound) \
 			or (not c['ignoreKeyword'] and not keyWordFound):
-				#print 'rejects all the remaining statements for event: ' + e['summary']
+				print 'rejects all the remaining statements for event: ' + e['summary']
 				continue # rejects all the remaining statements for this event
 
 		# Deal with calendar time offsets

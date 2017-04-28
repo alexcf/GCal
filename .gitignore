@@ -6,6 +6,7 @@ config.json
 *.pyc
 
 myNotes.txt
+sendToGit.sh
 
 # Ignore directories
 .credentials
