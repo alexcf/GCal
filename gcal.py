@@ -36,7 +36,7 @@ newDevicesList = [] # This is a python list
 APPLICATION_NAME = 'Google Calendar API for Domoticz'
 
 SCOPES = 'https://www.googleapis.com/auth/calendar.readonly'
-VERSION = '0.0.7'
+VERSION = '0.0.8'
 MSG_ERROR = 'Error'
 MSG_INFO = 'Info'
 MSG_EXEC = 'Exec info'
@@ -660,14 +660,15 @@ def process_calendar(c):
 			#print 'Keywords in use: ' + c['keyword']
 			keyWordFound = False
 			keyWords = c['keyword'].lower().split(';')
+
+
 			for keyWord in keyWords:
-				if not keyWordFound and 'summary' in e: keyWordFound = e['summary'].lower().find(keyWord) > 0
-				if not keyWordFound and 'description' in e: keyWordFound = e['description'].lower().find(keyWord) > 0
-				#if keyWordFound: print(keyWord)
+				if not keyWordFound and 'summary' in e: keyWordFound = e['summary'].lower().find(keyWord) != -1
+				if not keyWordFound and 'description' in e: keyWordFound = e['description'].lower().find(keyWord) != -1
 
 			if (c['ignoreKeyword'] and keyWordFound) \
 			or (not c['ignoreKeyword'] and not keyWordFound):
-				# print 'rejects all the remaining statements for event: ' + e['summary']
+				#print 'rejects all the remaining statements for event: ' + e['summary']
 				continue # rejects all the remaining statements for this event
 
 		# Deal with calendar time offsets
@@ -682,19 +683,21 @@ def process_calendar(c):
 			if domoticzNow <= endDateTimeMinus1min:
 				remainingEventsToday = remainingEventsToday + 1
 
+		# Please note that trippedEvent can be the next event that will trip! It doesn't equal that the event is tripped!
 		if trippedEvent == None:
 			withinEvent = True if (domoticzNow >= startDateTime) and (domoticzNow <= endDateTimeMinus1min) else False
+			if startDateTime.hour == 0 and startDateTime.minute == 0 and endDateTime.hour == 0 and endDateTime.minute == 0:
+				eventTimeText = startDateTime.strftime('%Y-%m-%d. (All day event)')
+			else:
+				eventTimeText = startDateTime.strftime('%Y-%m-%d. From %H:%M') + ' to ' + endDateTime.strftime('%H:%M')
 			if withinEvent:
-				if startDateTime.hour == 0 and startDateTime.minute == 0 and endDateTime.hour == 0 and endDateTime.minute == 0:
-					eventTimeText = startDateTime.strftime('%Y-%m-%d. (All day event)')
-				else:
-					eventTimeText = startDateTime.strftime('%Y-%m-%d. From %H:%M') + ' to ' + endDateTime.strftime('%H:%M')
 				tripped = True
 				trippedEvent = e['summary']
 				# print trippedEvent # Causes serious error if running in background!!!! 
 				# TODO: What if we have more active events? How should they be handled? Now we are only using the first event found that we are within
 			elif (domoticzNow < startDateTime):
 				trippedEvent = e['summary']
+				#print trippedEvent # Causes serious error if running in background!!!! 
 
 	#
 	#                                ("`-''-/").___..--''"`-._ 
@@ -707,11 +710,12 @@ def process_calendar(c):
 	seqText = ' !#' + str(remainingEventsToday) + '(' + str(eventsToday) + ')' + '!#'
 	if trippedEvent == None:
 		trippedEvent = CAL_NO_FUTURE_EVENTS
+		eventTimeText = ''
 	if not tripped:
 		format1 = '<span style="color: grey;">' # Future events are shown in grey
 		format2 = '</span>'
 	trippedEvent = format1 + trippedEvent + ' ' + seqText + format2
-	if tripped: trippedEvent = trippedEvent + '<BR/><span style="font-weight: normal;">' + eventTimeText + '</span>'
+	if eventTimeText != '': trippedEvent = trippedEvent + '<BR/><span style="font-weight: normal;">' + eventTimeText + '</span>'
 
 	if eventsToday != c['eventsToday'] \
 	or remainingEventsToday != c['remainingEventsToday'] \
