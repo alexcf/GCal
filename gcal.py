@@ -36,7 +36,7 @@ newDevicesList = [] # This is a python list
 APPLICATION_NAME = 'Google Calendar API for Domoticz'
 
 SCOPES = 'https://www.googleapis.com/auth/calendar.readonly'
-VERSION = '0.0.6'
+VERSION = '0.0.7'
 MSG_ERROR = 'Error'
 MSG_INFO = 'Info'
 MSG_EXEC = 'Exec info'
@@ -744,7 +744,13 @@ def list_calendars():
 	for c in cfg['calendars']['calendar']:
 		if c['enabled']:
 			elapsed = int((datetime.datetime.now() - datetime.datetime.strptime(c['lastCheck'], dateStrFmt)).total_seconds() / 60.0)
-			if elapsed >= c['interval']:
+
+			# Check if the raw Google Calendar Data json file exists, it might have disappeared, been deleted or whatever. Maybe it evaporated.
+			data_dir = os.path.join(cfg['system']['tmpFolder'], 'GCalData')
+			data_path = os.path.join(data_dir, str(c['calendarAddress']) + '.json')
+			jsonDataAvailable = True if os.path.isfile(data_path) else False
+
+			if elapsed >= c['interval'] or not jsonDataAvailable:
 				logMessage = 'Syncing Calendar data with Google: ' + c['shortName'] + '. Last fetched: ' + str(elapsed) + ' minutes ago. Interval: ' +str(c['interval'])
 				logToDomoticz(MSG_INFO, logMessage)
 				if tty: print logMessage
@@ -753,7 +759,7 @@ def list_calendars():
 				configChanged = True
 			else:
 				if isVerbose:
-					logMessage = 'Calendar data is up to date: ' + c['shortName'] + '. Last fetched: ' + str(elapsed) + ' minutes ago. Interval: ' +str(c['interval'])
+					logMessage = 'Google Calendar data is up to date: ' + c['shortName'] + '. Last fetched: ' + str(elapsed) + ' minutes ago. Interval: ' +str(c['interval'])
 					logToDomoticz(MSG_INFO, logMessage)
 					print logMessage
 			process_calendar(c)
