@@ -667,7 +667,7 @@ def process_calendar(c):
 
 			if (c['ignoreKeyword'] and keyWordFound) \
 			or (not c['ignoreKeyword'] and not keyWordFound):
-				print 'rejects all the remaining statements for event: ' + e['summary']
+				# print 'rejects all the remaining statements for event: ' + e['summary']
 				continue # rejects all the remaining statements for this event
 
 		# Deal with calendar time offsets
