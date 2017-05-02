@@ -8,3 +8,6 @@ GCal is written in Python and runs on Raspberry Pi. It can run on the same hardw
 Please note that this version of the program is still in its beta stage and for those of you who do decide to install the software we will appreciate your kind help to sort out any bugs which may appear.
 
 GCal runs separate from Domoticz so it won't introduce any delays in the Domoticz event queue while waiting for external Google servers.
+
+## Next release will require a new structure of the config file
+If You plan to install GCal You should wait a couple of days until the new version has been released to avoid having to redefine your GCal calendars an additional time.
