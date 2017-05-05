@@ -32,11 +32,14 @@ import pytz
 #redirect_uri = "http://showquerystring.000webhostapp.com/index.php" # Don't alter this or anything else!
 cfgFile = sys.path[0] + '/.data/config.json'
 configChanged = False
+googleCalStatesChanged = False
+gcalStatesChanged = False
 newDevicesList = [] # This is a python list
 APPLICATION_NAME = 'Google Calendar API for Domoticz'
 
 SCOPES = 'https://www.googleapis.com/auth/calendar.readonly'
-VERSION = '0.0.8'
+VERSION = '0.2.0'
+DB_VERSION = '1.0.0'
 MSG_ERROR = 'Error'
 MSG_INFO = 'Info'
 MSG_EXEC = 'Exec info'
@@ -49,7 +52,6 @@ lastClientID = ''
 lastClientSecret = ''
 dateStrFmt = '%Y-%m-%d %H:%M:%S'
 gCaldateStrFmt = '%Y-%m-%dT%H:%M:%S'
-
 
 def query_yes_no(question, default="no"):
 	valid = {"yes": True, "y": True, "ye": True,
@@ -74,6 +76,13 @@ def query_yes_no(question, default="no"):
 			sys.stdout.write("Please respond with 'yes' or 'no' "
 														 "(or 'y' or 'n').\n")
 
+# get a UUID - URL safe, Base64
+def get_a_uuid():
+	import base64
+	import uuid
+	r_uuid = base64.urlsafe_b64encode(uuid.uuid4().bytes)
+	return r_uuid.replace('=', '')
+
 def connected_to_internet(url='http://www.google.com/', timeout=5):
 	try:
 		_ = requests.head(url, timeout=timeout)
@@ -84,9 +93,20 @@ def connected_to_internet(url='http://www.google.com/', timeout=5):
 
 def default_input(message, defaultVal):
 	if defaultVal:
-		return raw_input( "%s [%s]:" % (message, defaultVal) ) or defaultVal
+		answer = raw_input("%s [%s]:" % (message, defaultVal)) or defaultVal
 	else:
-		return raw_input( "%s :" % (message) )
+		answer = raw_input("%s :" % (message))
+	if isinstance(answer, basestring):
+		return answer.strip()
+	else:
+		return answer
+
+def getGoogleCalendarAPIEntry(c):
+	# Return the googleCalendarAPI entry for the GCal Calendar entry
+	for g in cfg['googleCalendarAPI']['calendar']:
+		if g['calendarAddress'] == c['calendarAddress']:
+			return g
+	return None
 
 def saveConfigFile():
 	global configChanged
@@ -109,6 +129,8 @@ def create_config():
 	s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 	s.connect(('8.8.8.8', 0))	# connecting to a UDP address doesn't send packets
 	local_ip_address = s.getsockname()[0]
+	cfg['GCal'] = {}
+	cfg['GCal']['dbVersion'] = DB_VERSION
 	cfg['domoticz'] = {}
 
 	cfg['domoticz']['timeZone'] = ''
@@ -129,13 +151,15 @@ def create_config():
 	cfg['domoticz']['httpBasicAuth']['userName'] = \
 					default_input('Domoticz web interface user name (leave blank if no username is needed)', '')
 	cfg['domoticz']['httpBasicAuth']['passWord'] = \
-					default_input('Domoticz web interface password (leave blank if no passord is needed)', '')
+					default_input('Domoticz web interface password (leave blank if no password is needed)', '')
 	cfg['domoticz']['scpHost'] = \
 					default_input('Send calendar data with SCP to username@host (leave blank if domoticz is installed on this machine)', '')
 	cfg['domoticz']['scpDir'] = \
 					default_input('Send calendar data with SCP to remote directory (leave blank if domoticz is installed on this machine)', '')
 	cfg['calendars'] = {}
 	cfg['calendars']['calendar'] = []
+	cfg['googleCalendarAPI'] = {}
+	cfg['googleCalendarAPI']['calendar'] = []
 
 	cfg['system'] = {}
 	tmpdir = '/var/tmp' if os.path.isdir('/var/tmp') else '/tmp'
@@ -143,7 +167,7 @@ def create_config():
 	while not os.path.isdir(cfg['system']['tmpFolder']):
 		cfg['system']['tmpFolder'] = default_input('Directory for app logging and storing access tokens', tmpdir)
 		if not os.path.isdir(cfg['system']['tmpFolder']):
-			print 'That isn\'t a valid directory name on Your system! Please try again.'
+			print 'That isn\'t a valid directory name on your system! Please try again.'
 	# Do we already have a hardware device named 'Google Calendar' in Domoticz?
 	payload = dict([('type', 'hardware')])
 	r = domoticzAPI(payload)
@@ -210,6 +234,11 @@ def load_config():
 	try:
 		with open(cfgFile) as json_data_file:
 			cfg = json.load(json_data_file)
+			# I would love to have a better looking solution to convert it all to UTF-8
+			# Unless doing this i will get: UnicodeWarning: Unicode equal comparison failed to convert both arguments to Unicode
+			for c in cfg['calendars']['calendar']:
+				c['shortName'] = c['shortName'].encode('utf8')
+				c['keyword'] = c['keyword'].encode('utf8')
 	except IOError:
 		# Create a new config file
 		if tty:
@@ -253,35 +282,51 @@ def logToDomoticz(messageType, logMessage):
 	r = domoticzAPI(payload)
 	return r
 
-def createConfigEntry():
+def isUniqueCalShortName(shortName):
+	# Check if a unique calendar short name has been given
+	for c in cfg['calendars']['calendar']:
+		if c['shortName'].lower() == shortName.lower():
+			return False
+	return True
 
+def createUserVariable(userVariableType, userVariableName):
+	payload = dict([('type', 'command'), ('param', 'saveuservariable'), ('vname', userVariableName), \
+								('vtype', userVariableType), ('vvalue', 0)])
+	r = domoticzAPI(payload)
+	# Now go fishing for the newly created user variable to get the idx number
+	payload = dict([('type', 'command'), ('param', 'getuservariables')])
+	r = domoticzAPI(payload)
+	varIdx = 0
+	for userVar in reversed(r['result']):
+		if userVar['Name'].encode('utf8') == userVariableName:
+			varIdx = userVar['idx']
+			break
+	if varIdx <> '0':
+		return varIdx
+	else:
+		print 'Error: Can not find the newly created Domoticz user variable: ' + userVariableName
+		sys.exit(0)
+
+def createConfigEntry():
 	entry = {}
 	if not tty:
 		return entry
-	lastOAuth2ClientID = ''
-	lastOAuth2ClientSecret = ''
-	if len (cfg['calendars']['calendar']) > 0:
-		lastOAuth2ClientID = cfg['calendars']['calendar'][0]['oAuth2ClientCredentials']['clientId']
-		lastOAuth2ClientSecret = cfg['calendars']['calendar'][0]['oAuth2ClientCredentials']['clientId']
 	entry['enabled'] = False
-
-	entry['tripped'] = False # Set by the device. 0 if not tripped, 1 if tripped
-	entry['trippedEvent'] = None # Set by the device. The name of the currently tripped event (if tripped) or the next event (if not tripped)
-	entry['eventsToday'] = 0 # Set by the device. Gives a count of the number of events present in the calendar in the current (local time) 24 hrs. This will remain the same during the day.
-	entry['remainingEventsToday'] = 0 # Set by the device. Gives a count of the number of events remaining in the current day. This will start out equal to eventsToday and decrease as each event completes. When no more events remain it will be 0
-	entry['lastCheck'] =  (datetime.datetime.now() - datetime.timedelta(days=10)).strftime(dateStrFmt) # Set by the device. The date and time the script last checked the calendar
+	entry['uuid'] = get_a_uuid()
 
 	entry['domoticzSwitchIdx'] = 0
 	entry['domoticzTextIdx'] = 0
 
 	entry['shortName'] = ''
 	while len(entry['shortName']) < 1:
-		entry['shortName'] = default_input('Calendar short name (Any unique name that You wish to use for this calendar) ', '')
+		entry['shortName'] = default_input('GCal entry short name (Any unique name that You wish to use for this GCal entry) Please keep it very short.', '')
 		if len(entry['shortName']) < 1:
 			print 'That doesn\'t look like a valid short name'
 			print 'Please try again'
-
-	entry['oAuth2ClientCredentials'] = {}
+		elif not isUniqueCalShortName(entry['shortName']):
+			print 'That name is already in use'
+			print 'Please try again'
+			entry['shortName'] = ''
 
 	match = None
 	entry['calendarAddress'] = ''
@@ -293,23 +338,33 @@ def createConfigEntry():
 			print '\'' + entry['calendarAddress'] + '\' doesn\'t look like a valid calendar public address'
 			print 'Please try again'
 
-	entry['oAuth2ClientCredentials']['clientId'] = ''
-	while len(entry['oAuth2ClientCredentials']['clientId']) < 10:
-		entry['oAuth2ClientCredentials']['clientId'] = default_input('Calendar OAuth2 Client ID:', lastOAuth2ClientID)
-		if len(entry['oAuth2ClientCredentials']['clientId']) < 10:
-			print 'That doesn\'t look like a valid OAuth2 Client ID'
-			print 'Please try again'
+	apiEntry = {}
+	if getGoogleCalendarAPIEntry(entry) == None: # We need to create a googleCalendarAPI entry as well
+		apiEntry['calendarAddress'] = entry['calendarAddress']
+		lastOAuth2ClientID = ''
+		lastOAuth2ClientSecret = ''
+		if len (cfg['googleCalendarAPI']['calendar']) > 0:
+			lastOAuth2ClientID = cfg['googleCalendarAPI']['calendar'][0]['oAuth2ClientCredentials']['clientId']
+			lastOAuth2ClientSecret = cfg['googleCalendarAPI']['calendar'][0]['oAuth2ClientCredentials']['clientSecret']
 
-	entry['oAuth2ClientCredentials']['clientSecret'] = ''
-	while len(entry['oAuth2ClientCredentials']['clientSecret']) < 10:
-		entry['oAuth2ClientCredentials']['clientSecret'] = default_input('Calendar OAuth2 Client Secret', lastOAuth2ClientSecret)
-		if len(entry['oAuth2ClientCredentials']['clientSecret']) < 10:
-			print 'That doesn\'t look like a valid OAuth2 Client Secret'
-			print 'Please try again'
+		apiEntry['oAuth2ClientCredentials'] = {}
+		apiEntry['oAuth2ClientCredentials']['clientId'] = ''
+		while len(apiEntry['oAuth2ClientCredentials']['clientId']) < 10:
+			apiEntry['oAuth2ClientCredentials']['clientId'] = default_input('Calendar OAuth2 Client ID:', lastOAuth2ClientID)
+			if len(apiEntry['oAuth2ClientCredentials']['clientId']) < 10:
+				print 'That doesn\'t look like a valid OAuth2 Client ID'
+				print 'Please try again'
+
+		apiEntry['oAuth2ClientCredentials']['clientSecret'] = ''
+		while len(apiEntry['oAuth2ClientCredentials']['clientSecret']) < 10:
+			apiEntry['oAuth2ClientCredentials']['clientSecret'] = default_input('Calendar OAuth2 Client Secret', lastOAuth2ClientSecret)
+			if len(apiEntry['oAuth2ClientCredentials']['clientSecret']) < 10:
+				print 'That doesn\'t look like a valid OAuth2 Client Secret'
+				print 'Please try again'
 
 	# This is the maximum amount of time in minutes between refreshes of the calendar.
 	entry['interval'] = 0
-	while entry['interval'] < 5 or entry['interval'] > 60*24:
+	while entry['interval'] < 5 or entry['interval'] > 60*24*7:
 		entry['interval'] = default_input('Number of minutes between refreshes of the calendar (5-10080)', '180')
 		try:
 			entry['interval'] = int(entry['interval'])
@@ -352,7 +407,7 @@ def createConfigEntry():
 	# Set this to true if you want the script to match an event name exactly. Set to false if you want the script to match anywhere in the event name.
 	entry['exactKeyword'] = False
 	if entry['keyword'] != '':
-		if query_yes_no('Match an event name exactly', 'yes'):
+		if query_yes_no('Event name and / or description should match the keyword exactly', 'no'):
 			entry['exactKeyword'] = True
 
 	# Set this to true if you want the script to ignore any events where the event name matches the keyword or the description contains the keyword. Default is false.
@@ -374,8 +429,25 @@ def createConfigEntry():
 	domoSwitchDeviceName = 'GCal ' + entry['shortName']
 	domoTextDeviceName = 'GCal Status ' + entry['shortName']
 	if entry['startDelta'] != 0 or entry['endDelta'] != 0:
-		domoSwitchDeviceName = domoSwitchDeviceName + ' ('  + str(entry['startDelta']) + ':' + str(entry['endDelta']) + ')'
-		domoTextDeviceName = domoTextDeviceName + ' ('  + str(entry['startDelta']) + ':' + str(entry['endDelta']) + ')'
+		domoSwitchDeviceName = domoSwitchDeviceName + ' (' + str(entry['startDelta']) + ':' + str(entry['endDelta']) + ')'
+		domoTextDeviceName = domoTextDeviceName + ' (' + str(entry['startDelta']) + ':' + str(entry['endDelta']) + ')'
+	if entry['keyword'] != '':
+		keyWords = entry['keyword'].lower().split(';')
+		domoSwitchDeviceName = domoSwitchDeviceName + ' kw:' + keyWords[0]
+		domoTextDeviceName = domoTextDeviceName + ' kw:' + keyWords[0]
+
+	# Create some Domoticz user variables
+	userVariableType = 0 # Integer
+	userVariableName = 'GCal-' + entry['shortName'] + '-eventsToday'
+	entry['domoticzUVEventsTodayIdx'] = createUserVariable(userVariableType, userVariableName)
+
+	userVariableType = 0 # Integer
+	userVariableName = 'GCal-' + entry['shortName'] + '-remainingEventsToday'
+	entry['domoticzUVRemainingEventsTodayIdx'] = createUserVariable(userVariableType, userVariableName)
+
+	userVariableType = 2 # Text, maximum size is 200 bytes
+	userVariableName = 'GCal-' + entry['shortName'] + '-trippedEvent'
+	entry['domoticzUVTrippedEventIdx'] = createUserVariable(userVariableType, userVariableName)
 
 	# Create a Virtual Switch Device
 	domoticzSensorType = 6 # Switch
@@ -387,7 +459,7 @@ def createConfigEntry():
 	r = domoticzAPI(payload)
 	devIdx = 0
 	for dev in reversed(r['result']):
-		if dev['Name'] == domoSwitchDeviceName and dev['HardwareID'] == cfg['domoticz']['virtualHwDeviceIdx'] and dev['SubType'] == 'Switch':
+		if dev['Name'].encode('utf8') == domoSwitchDeviceName and dev['HardwareID'] == cfg['domoticz']['virtualHwDeviceIdx'] and dev['SubType'] == 'Switch':
 			devIdx = dev['idx']
 			break
 	if devIdx <> '0':
@@ -412,7 +484,7 @@ def createConfigEntry():
 	r = domoticzAPI(payload)
 	devIdx = 0
 	for dev in reversed(r['result']):
-		if dev['Name'] == domoTextDeviceName and dev['HardwareID'] == cfg['domoticz']['virtualHwDeviceIdx'] and dev['SubType'] == 'Text':
+		if dev['Name'].encode('utf8') == domoTextDeviceName and dev['HardwareID'] == cfg['domoticz']['virtualHwDeviceIdx'] and dev['SubType'] == 'Text':
 			devIdx = dev['idx']
 			break
 	if devIdx <> '0':
@@ -427,37 +499,52 @@ def createConfigEntry():
 									('activetype', 0), ('activeidx', devIdx)])
 	r = domoticzAPI(payload)
 
-	updateDomoTextDevice(entry) # Update the text on the text device
+	updateDomoTextDevice(entry, None) # Update the text on the text device
 
 	cfg['calendars']['calendar'].append(entry)
+	if 'calendarAddress' in apiEntry:
+		cfg['googleCalendarAPI']['calendar'].append(apiEntry)
+
 	with open(cfgFile, 'w') as outfile:
 		json.dump(cfg, outfile, indent=2, sort_keys=True, separators=(',', ':'))
 	configChanged = False
 
 	return entry
 
-def updateDomoSwitchDevice(calendarEntry):
-	if not calendarEntry['enabled']:
+def updateDomoSwitchDevice(c, tripped, trippedID, gcalStateEntry):
+	if not c['enabled']:
 		return
-	# Only update if the new value differs from the device value
-	# or if the device has not been updated for a while
-	payload = dict([('type', 'devices'), ('rid', calendarEntry['domoticzSwitchIdx'])])
+
+	reTrip = False
+	# gcalStateEntry still holds the previous value
+	if tripped and gcalStateEntry['tripped'] and (gcalStateEntry['trippedID'] !=  trippedID) and c['retrip']:
+		# Old event still tripped. Now there is a new event that is also tripped.
+		reTrip = True
+
+	# Get the current switch device value from Domoticz
+	payload = dict([('type', 'devices'), ('rid', c['domoticzSwitchIdx'])])
 	r = domoticzAPI(payload)
 
 	if not 'result' in r.keys():
-		errMess = 'Failure getting data for domoticz device idx: ' + str(calendarEntry['domoticzSwitchIdx'])
+		errMess = 'Failure getting data for domoticz device idx: ' + str(c['domoticzSwitchIdx'])
 		print errMess
 		logToDomoticz(MSG_ERROR, errMess)
 		return
 
 	domoCompareValue = r['result'][0]['Status']
-	if calendarEntry['tripped']:
-		newValue = 'On'
-	else:
-		newValue = 'Off'
 
-	valueChanged = False
-	if newValue <> domoCompareValue: valueChanged = True
+	if reTrip and domoCompareValue == 'On':
+		newValue = 'Off'
+		payload = dict([('type', 'command'), ('param', 'switchlight'), ('idx', c['domoticzSwitchIdx']), \
+									('switchcmd', newValue)])
+		r = domoticzAPI(payload)
+		domoCompareValue == 'Off'
+		time.sleep(5) # delays for 5 seconds
+		# TODO: Try to schedule the next job instead of having a delay here
+
+	newValue = 'On' if tripped else 'Off'
+
+	valueChanged = True if (newValue <> domoCompareValue) else False
 
 	if isDebug:
 		print r['result'][0]['Name']
@@ -465,7 +552,7 @@ def updateDomoSwitchDevice(calendarEntry):
 		print 'D: ' + str(domoCompareValue)
 		print
 	elif isVerbose and valueChanged:
-		sayThis = 'Updating Domoticz device \'' + r['result'][0]['Name'] + '\' idx: ' + str(calendarEntry['domoticzSwitchIdx']) + ' due to:'
+		sayThis = 'Updating Domoticz device \'' + r['result'][0]['Name'] + '\' idx: ' + str(c['domoticzSwitchIdx']) + ' due to:'
 		if valueChanged: sayThis += ' <value changed>. New value is: ' + newValue + \
 																'. Old value was: ' + str(domoCompareValue) + '.'
 		print sayThis
@@ -473,29 +560,75 @@ def updateDomoSwitchDevice(calendarEntry):
 	if not valueChanged:
 		return
 
-	payload = dict([('type', 'command'), ('param', 'switchlight'), ('idx', calendarEntry['domoticzSwitchIdx']), \
+	payload = dict([('type', 'command'), ('param', 'switchlight'), ('idx', c['domoticzSwitchIdx']), \
 								('switchcmd', newValue)])
 	r = domoticzAPI(payload)
 
-def updateDomoTextDevice(calendarEntry):
-	if not calendarEntry['enabled']:
-		return
-	# Only update if the new value differs from the device value
-	# or if the device has not been updated for a while
-	payload = dict([('type', 'devices'), ('rid', calendarEntry['domoticzTextIdx'])])
+def updateDomoUserVars(c, eventsToday, remainingEventsToday, trippedEvent):
+	if trippedEvent == None: trippedEvent = ''
+	userVariableType = 0 # Integer
+	varName = 'GCal-' + c['shortName'] + '-eventsToday'
+	updateDomoUserVar(userVariableType, c['domoticzUVEventsTodayIdx'], varName, eventsToday)
+	varName = 'GCal-' + c['shortName'] + '-remainingEventsToday'
+	updateDomoUserVar(userVariableType, c['domoticzUVRemainingEventsTodayIdx'], varName, remainingEventsToday)
+	userVariableType = 2 # Text
+	varName = 'GCal-' + c['shortName'] + '-trippedEvent'
+	updateDomoUserVar(userVariableType, c['domoticzUVTrippedEventIdx'], varName, trippedEvent)
+
+def updateDomoUserVar(userVariableType, idx, varName, newValue):
+	# Only update if the new value differs from the previous user variable value
+	payload = dict([('type', 'command'), ('param', 'getuservariable'), ('idx', idx)])
 	r = domoticzAPI(payload)
 
 	if not 'result' in r.keys():
-		errMess = 'Failure getting data for domoticz device idx: ' + str(calendarEntry['domoticzTextIdx'])
+		errMess = 'Failure getting data for domoticz user variable idx: ' + str(idx)
+		if tty: print errMess
+		logToDomoticz(MSG_ERROR, errMess)
+		return
+
+	domoCompareValue = r['result'][0]['Value']
+	if userVariableType == 0: domoCompareValue = int(domoCompareValue)
+
+	valueChanged = False
+	if newValue <> domoCompareValue: valueChanged = True
+	if isDebug:
+		print 'User variable: ' + r['result'][0]['Name']
+		print 'N: ' + str(newValue)
+		print 'D: ' + str(domoCompareValue)
+		print
+	elif isVerbose and valueChanged:
+		sayThis = 'Updating Domoticz user variable \'' + r['result'][0]['Name'] + '\' idx: ' + str(idx) + ' due to:'
+		if valueChanged: sayThis += ' <value changed>. New value is: ' + str(newValue) + \
+																'. Old value was: ' + str(domoCompareValue) + '.'
+		print sayThis
+
+	if not valueChanged:
+		return
+
+	payload = dict([('type', 'command'), ('param', 'updateuservariable'), ('vname', varName), \
+								('vtype', userVariableType), ('vvalue', newValue)])
+	r = domoticzAPI(payload)
+
+
+def updateDomoTextDevice(c, eventInfoText):
+	if not c['enabled']:
+		return
+	# Only update if the new value differs from the device value
+	# or if the device has not been updated for a while
+	payload = dict([('type', 'devices'), ('rid', c['domoticzTextIdx'])])
+	r = domoticzAPI(payload)
+
+	if not 'result' in r.keys():
+		errMess = 'Failure getting data for domoticz device idx: ' + str(c['domoticzTextIdx'])
 		if tty: print errMess
 		logToDomoticz(MSG_ERROR, errMess)
 		return
 
 	domoCompareValue = r['result'][0]['Data']
-	if calendarEntry['trippedEvent'] == None:
+	if eventInfoText == None:
 		newValue = CAL_NO_FUTURE_EVENTS
 	else:
-		newValue = calendarEntry['trippedEvent']
+		newValue = eventInfoText
 
 	valueChanged = False
 	if newValue <> domoCompareValue: valueChanged = True
@@ -505,7 +638,7 @@ def updateDomoTextDevice(calendarEntry):
 		print 'D: ' + domoCompareValue
 		print
 	elif isVerbose and valueChanged:
-		sayThis = 'Updating Domoticz device \'' + r['result'][0]['Name'] + '\' idx: ' + str(calendarEntry['domoticzTextIdx']) + ' due to:'
+		sayThis = 'Updating Domoticz device \'' + r['result'][0]['Name'] + '\' idx: ' + str(c['domoticzTextIdx']) + ' due to:'
 		if valueChanged: sayThis += ' <value changed>. New value is: ' + newValue + \
 																'. Old value was: ' + domoCompareValue + '.'
 		print sayThis
@@ -513,11 +646,11 @@ def updateDomoTextDevice(calendarEntry):
 	if not valueChanged:
 		return
 
-	payload = dict([('type', 'command'), ('param', 'udevice'), ('idx', calendarEntry['domoticzTextIdx']), \
+	payload = dict([('type', 'command'), ('param', 'udevice'), ('idx', c['domoticzTextIdx']), \
 								('svalue', newValue)])
 	r = domoticzAPI(payload)
 
-def get_credentials(c, cred_args):
+def get_credentials(g, cred_args):
 	"""Gets valid user credentials from storage.
 
 	If nothing has been stored, or if the stored credentials are invalid,
@@ -529,7 +662,7 @@ def get_credentials(c, cred_args):
 	global lastCredentials
 	global lastClientID
 
-	client_id = c['oAuth2ClientCredentials']['clientId']
+	client_id = g['oAuth2ClientCredentials']['clientId']
 	if client_id == lastClientID:
 		# Re-using last credentials
 		return lastCredentials
@@ -545,7 +678,7 @@ def get_credentials(c, cred_args):
 	credentials = store.get()
 	if not credentials or credentials.invalid:
 		flow = OAuth2WebServerFlow(client_id=client_id,
-						client_secret=c['oAuth2ClientCredentials']['clientSecret'],
+						client_secret=g['oAuth2ClientCredentials']['clientSecret'],
 						scope=SCOPES,
 						redirect_uri='http://localhost:8080')
 		flow.user_agent = APPLICATION_NAME
@@ -560,27 +693,32 @@ def get_credentials(c, cred_args):
 
 	return credentials
 
-def syncWithGoogle(c):
+def syncWithGoogle(g):
 	global cfg
 	cred_args = []
 	cred_args.append('--noauth_local_webserver')
 
-	timeMin = (datetime.datetime.utcnow() + datetime.timedelta(minutes=c['endDelta']) - datetime.timedelta(hours=24)) # Limit for historical events
-	timeMax = (datetime.datetime.utcnow() + datetime.timedelta(minutes=c['startDelta']) + datetime.timedelta(hours=24)) # Limit for future events
-	timeMax = timeMax + datetime.timedelta(minutes=c['interval']) # Add the update interval to timeMax
+	#timeMin = (datetime.datetime.utcnow() + datetime.timedelta(minutes=c['endDelta']) - datetime.timedelta(hours=24)) # Limit for historical events
+	#timeMax = (datetime.datetime.utcnow() + datetime.timedelta(minutes=c['startDelta']) + datetime.timedelta(hours=24)) # Limit for future events
+	#timeMax = timeMax + datetime.timedelta(minutes=c['interval']) # Add the update interval to timeMax
+	# TODO:
+	timeMin = (datetime.datetime.utcnow() + datetime.timedelta(minutes=180) - datetime.timedelta(hours=24)) # Limit for historical events
+	timeMax = (datetime.datetime.utcnow() + datetime.timedelta(minutes=180) + datetime.timedelta(hours=24)) # Limit for future events
+	timeMax = timeMax + datetime.timedelta(minutes=180) # Add the update interval to timeMax
+
 	timeMin = timeMin.isoformat() + 'Z'
 	timeMax = timeMax.isoformat() + 'Z'
 
-	credentials = get_credentials(c, cred_args)
+	credentials = get_credentials(g, cred_args)
 	http = credentials.authorize(httplib2.Http())
 	service = discovery.build('calendar', 'v3', http=http)
 
-	logMessage = 'Getting events for calendar ' + c['calendarAddress']
+	logMessage = 'Getting events for calendar ' + g['calendarAddress']
 	logToDomoticz(MSG_INFO, logMessage)
 	if isVerbose: print logMessage
 
 	eventsResult = service.events().list(
-		calendarId=c['calendarAddress'], timeMin=timeMin, timeMax=timeMax, singleEvents=True,
+		calendarId=g['calendarAddress'], timeMin=timeMin, timeMax=timeMax, singleEvents=True,
 		orderBy='startTime').execute()
 	events = eventsResult.get('items', [])
 
@@ -593,9 +731,9 @@ def syncWithGoogle(c):
 	data_dir = os.path.join(cfg['system']['tmpFolder'], 'GCalData')
 	if not os.path.exists(data_dir):
 		os.makedirs(data_dir)
-	data_path = os.path.join(data_dir, str(c['calendarAddress']) + '.json')
+	jsonCalFileName = os.path.join(data_dir, str(g['calendarAddress']) + '.json')
 
-	with io.open(data_path, 'w', encoding='utf-8') as outfile:
+	with io.open(jsonCalFileName, 'w', encoding='utf-8') as outfile:
 		my_json_str = json.dumps(events, ensure_ascii=False, indent=2, sort_keys=True)
 		if isinstance(my_json_str, str): # Python 2.x JSON module gives either Unicode or str depending on the contents of the object.
 			my_json_str = my_json_str.decode('utf-8')
@@ -607,27 +745,165 @@ def syncWithGoogle(c):
 		from subprocess import call
 		cmd = 'ssh ' + cfg['domoticz']['scpHost'] + ' mkdir -p ' + cfg['domoticz']['scpDir']
 		call(cmd.split(" "))
-		cmd = 'scp ' + data_path + ' ' + cfg['domoticz']['scpHost'] + ':' + cfg['domoticz']['scpDir']
+		cmd = 'scp ' + jsonCalFileName + ' ' + cfg['domoticz']['scpHost'] + ':' + cfg['domoticz']['scpDir']
 		if isVerbose: print cmd
 		call(cmd.split(" "))
 
-def load_calendar(c):
+def load_calendar(g):
 	data_dir = os.path.join(cfg['system']['tmpFolder'], 'GCalData')
-	data_path = os.path.join(data_dir, str(c['calendarAddress']) + '.json')
+	jsonCalFileName = os.path.join(data_dir, str(g['calendarAddress']) + '.json')
 	try:
-		with open(data_path) as json_calendar_file:
-			events = json.load(json_calendar_file)
+		with open(jsonCalFileName) as aFile:
+			events = json.load(aFile)
 	except:
-		logMessage = 'Can not open the calendar file ' + data_path
+		logMessage = 'Couldn\'t open the Google Calendar Data json file ' + jsonCalFileName
 		if tty: print logMessage, sys.exc_info()[0]
 		sys.exit(0)
 	return events
 
-def process_calendar(c):
+#	There are 2 kinds of calendar states
+# 1) The Google Calendar states are stored in  google_calendar_states.json
+#    A Google Calendar can have many defined GCal entries using different start- and end deltas, keywords etc
+#
+# 2) The GCal entry states are stored in  gcal_calendar_states.json
+
+def loadGoogleCalStates():
+	# The Google calendar state json file holds information about the Google calendar entry states,
+	#  this file is dispensable and will be recreated if necessary hence can be stored on a tmpfs drive.
+
+	global googleCalStatesChanged
+	data_dir = os.path.join(cfg['system']['tmpFolder'], 'GCalData')
+	jsonGoogleCalStateFileName = os.path.join(data_dir, 'google_calendar_states.json')
+	try:
+		with open(jsonGoogleCalStateFileName) as aFile:
+			googleCalStates = json.load(aFile)
+	except IOError:
+		# We need this file so let's just create one
+		googleCalStates = []
+
+		for c in cfg['googleCalendarAPI']['calendar']:
+			createGoogleCalStateEntry(c)
+
+	except:
+		logMessage = 'Can not open the GCal calendar entry states file ' + jsonGoogleCalStateFileName
+		if tty: print logMessage, sys.exc_info()[0]
+		sys.exit(0)
+	return googleCalStates
+
+def createGoogleCalStateEntry(c):
+	global googleCalStatesChanged
+	global googleCalStates
+	calStateEntry = {}
+	calStateEntry['calendarAddress'] = c['calendarAddress']
+	calStateEntry['lastCheck'] = (datetime.datetime.now() - datetime.timedelta(days=10)).strftime(dateStrFmt)
+	googleCalStates.append(calStateEntry)
+	googleCalStatesChanged = True
+	return calStateEntry
+
+def getGoogleCalStateEntry(c):
+	for cs in googleCalStates:
+		if cs['calendarAddress'] == c['calendarAddress']:
+			return cs
+
+	logMessage = 'Creating a new Google Calendar state entry for calendar with address: ' + c['calendarAddress']
+	if tty: print logMessage
+	return createGoogleCalStateEntry(c)
+
+def saveGoogleCalStates():
+	global googleCalStatesChanged
+	data_dir = os.path.join(cfg['system']['tmpFolder'], 'GCalData')
+	jsonGoogleCalStateFileName = os.path.join(data_dir, 'google_calendar_states.json')
+
+	with io.open(jsonGoogleCalStateFileName, 'w', encoding='utf-8') as outfile:
+		my_json_str = json.dumps(googleCalStates, ensure_ascii=False, indent=2, sort_keys=True)
+		if isinstance(my_json_str, str): # Python 2.x JSON module gives either Unicode or str depending on the contents of the object.
+			my_json_str = my_json_str.decode('utf-8')
+		outfile.write(my_json_str)
+	googleCalStatesChanged = False
+
+	# Copy the json data to remote host if applicable
+	# SSH public-key authentication to connect to a remote system must have been established prior to using
+	if len(cfg['domoticz']['scpHost']) > 0 and len(cfg['domoticz']['scpDir']) > 0:
+		from subprocess import call
+		cmd = 'scp ' + jsonGoogleCalStateFileName + ' ' + cfg['domoticz']['scpHost'] + ':' + cfg['domoticz']['scpDir']
+		if isVerbose: print cmd
+		call(cmd.split(" "))
+
+def loadGCalStates():
+	# The GCal state json file holds information about the GCal entry states,
+	#  this file is dispensable and will be recreated if necessary hence can be stored on a tmpfs drive.
+	global gcalStatesChanged
+	global gcalStates
+
+	data_dir = os.path.join(cfg['system']['tmpFolder'], 'GCalData')
+	jsonGcalStateFileName = os.path.join(data_dir, 'gcal_calendar_states.json')
+	try:
+		with open(jsonGcalStateFileName) as aFile:
+			gcalStates = json.load(aFile)
+	except IOError:
+		# We need this file so let's just create one
+		gcalStates = []
+
+		for c in cfg['calendars']['calendar']:
+			createGcalStateEntry(c)
+
+	except:
+		logMessage = 'Can not open the GCal entry states file ' + jsonGcalStateFileName
+		if tty: print logMessage, sys.exc_info()[0]
+		sys.exit(0)
+	return gcalStates
+
+def createGcalStateEntry(c):
+	global gcalStatesChanged
+	global gcalStates
+	calStateEntry = {}
+	calStateEntry['uuid'] = c['uuid']
+	calStateEntry['eventsToday'] = 0
+	calStateEntry['remainingEventsToday'] = 0
+	calStateEntry['tripped'] = False
+	calStateEntry['trippedID'] = None
+	calStateEntry['trippedEvent'] = None
+	calStateEntry['upcomingEvent'] = None
+	gcalStates.append(calStateEntry)
+	gcalStatesChanged = True
+	return calStateEntry
+
+def getGcalStateEntry(c):
+	for cs in gcalStates:
+		if cs['uuid'] == c['uuid']:
+			return cs
+
+	logMessage = 'Creating a new GCal state entry for calendar with UUID: ' + c['uuid']
+	if tty: print logMessage
+	return createGcalStateEntry(c)
+
+def saveGcalStates():
+	global gcalStatesChanged
+	data_dir = os.path.join(cfg['system']['tmpFolder'], 'GCalData')
+	jsonGcalStateFileName = os.path.join(data_dir, 'gcal_calendar_states.json')
+
+	with io.open(jsonGcalStateFileName, 'w', encoding='utf-8') as outfile:
+		my_json_str = json.dumps(gcalStates, ensure_ascii=False, indent=2, sort_keys=True)
+		if isinstance(my_json_str, str): # Python 2.x JSON module gives either Unicode or str depending on the contents of the object.
+			my_json_str = my_json_str.decode('utf-8')
+		outfile.write(my_json_str)
+	gcalStatesChanged = False
+
+	# Copy the json data to remote host if applicable
+	# SSH public-key authentication to connect to a remote system must have been established prior to using
+	if len(cfg['domoticz']['scpHost']) > 0 and len(cfg['domoticz']['scpDir']) > 0:
+		from subprocess import call
+		cmd = 'scp ' + jsonGcalStateFileName + ' ' + cfg['domoticz']['scpHost'] + ':' + cfg['domoticz']['scpDir']
+		if isVerbose: print cmd
+		call(cmd.split(" "))
+
+def process_calendar(c, g, googleCalStateEntry, gcalStateEntry):
 	global cfg
 	global configChanged
+	global googleCalStatesChanged
+	global gcalStatesChanged
 
-	events = load_calendar(c)
+	events = load_calendar(g)
 	# Get the current UTC offset
 	offset = (time.timezone if (time.localtime().tm_isdst == 0) else time.altzone) / 60 / 60 * -1
 
@@ -640,6 +916,8 @@ def process_calendar(c):
 	remainingEventsToday = 0
 	tripped = False
 	trippedEvent = None
+	trippedID = None
+	upcomingEvent = None
 
 	activeEvent = CAL_NO_FUTURE_EVENTS
 	withinEvent = False
@@ -663,8 +941,12 @@ def process_calendar(c):
 
 
 			for keyWord in keyWords:
-				if not keyWordFound and 'summary' in e: keyWordFound = e['summary'].lower().find(keyWord) != -1
-				if not keyWordFound and 'description' in e: keyWordFound = e['description'].lower().find(keyWord) != -1
+				if c['exactKeyword']:
+					if not keyWordFound and 'summary' in e: keyWordFound = e['summary'].lower() == keyWord
+					if not keyWordFound and 'description' in e: keyWordFound = e['description'].lower == keyWord
+				else:
+					if not keyWordFound and 'summary' in e: keyWordFound = e['summary'].lower().find(keyWord) != -1
+					if not keyWordFound and 'description' in e: keyWordFound = e['description'].lower().find(keyWord) != -1
 
 			if (c['ignoreKeyword'] and keyWordFound) \
 			or (not c['ignoreKeyword'] and not keyWordFound):
@@ -683,8 +965,7 @@ def process_calendar(c):
 			if domoticzNow <= endDateTimeMinus1min:
 				remainingEventsToday = remainingEventsToday + 1
 
-		# Please note that trippedEvent can be the next event that will trip! It doesn't equal that the event is tripped!
-		if trippedEvent == None:
+		if trippedEvent == None and upcomingEvent == None:
 			withinEvent = True if (domoticzNow >= startDateTime) and (domoticzNow <= endDateTimeMinus1min) else False
 			if startDateTime.hour == 0 and startDateTime.minute == 0 and endDateTime.hour == 0 and endDateTime.minute == 0:
 				eventTimeText = startDateTime.strftime('%Y-%m-%d. (All day event)')
@@ -693,11 +974,12 @@ def process_calendar(c):
 			if withinEvent:
 				tripped = True
 				trippedEvent = e['summary']
+				trippedID = e['id']
 				# print trippedEvent # Causes serious error if running in background!!!! 
 				# TODO: What if we have more active events? How should they be handled? Now we are only using the first event found that we are within
 			elif (domoticzNow < startDateTime):
-				trippedEvent = e['summary']
-				#print trippedEvent # Causes serious error if running in background!!!! 
+				upcomingEvent = e['summary']
+				#print upcomingEvent # Causes serious error if running in background!!!! 
 
 	#
 	#                                ("`-''-/").___..--''"`-._ 
@@ -707,31 +989,44 @@ def process_calendar(c):
 	#                             (il),-''  (li),'  ((!.-'
 	#
 
-	seqText = ' !#' + str(remainingEventsToday) + '(' + str(eventsToday) + ')' + '!#'
-	if trippedEvent == None:
-		trippedEvent = CAL_NO_FUTURE_EVENTS
+	seqText = ' ' + str(remainingEventsToday) + '(' + str(eventsToday) + ')'
+	if trippedEvent == None and upcomingEvent == None:
+		eventInfoText = CAL_NO_FUTURE_EVENTS
 		eventTimeText = ''
+	elif trippedEvent == None:
+		eventInfoText = upcomingEvent
+	else:
+		eventInfoText = trippedEvent
+
 	if not tripped:
 		format1 = '<span style="color: grey;">' # Future events are shown in grey
 		format2 = '</span>'
-	trippedEvent = format1 + trippedEvent + ' ' + seqText + format2
-	if eventTimeText != '': trippedEvent = trippedEvent + '<BR/><span style="font-weight: normal;">' + eventTimeText + '</span>'
+	eventInfoText = format1 + eventInfoText + ' ' + seqText + format2
+	if eventTimeText != '': eventInfoText = eventInfoText + '<BR/><span style="font-weight: normal;">' + eventTimeText + '</span>'
 
-	if eventsToday != c['eventsToday'] \
-	or remainingEventsToday != c['remainingEventsToday'] \
-	or tripped != c['tripped'] \
-	or trippedEvent != c['trippedEvent']:
-		configChanged = True
-		c['eventsToday'] = eventsToday
-		c['remainingEventsToday'] = remainingEventsToday
-		c['tripped'] = tripped
-		c['trippedEvent'] = trippedEvent
-	updateDomoTextDevice(c)
-	updateDomoSwitchDevice(c)
+	updateDomoUserVars(c, eventsToday, remainingEventsToday, trippedEvent)
+	updateDomoTextDevice(c, eventInfoText)
+	updateDomoSwitchDevice(c, tripped, trippedID, gcalStateEntry)
+
+	if gcalStateEntry['tripped'] != tripped \
+	or gcalStateEntry['trippedEvent'] != trippedEvent \
+	or gcalStateEntry['trippedID'] != trippedID \
+	or gcalStateEntry['eventsToday'] != eventsToday \
+	or gcalStateEntry['remainingEventsToday'] != remainingEventsToday \
+	or gcalStateEntry['upcomingEvent'] != upcomingEvent:
+		gcalStateEntry['tripped'] = tripped
+		gcalStateEntry['trippedEvent'] = trippedEvent
+		gcalStateEntry['trippedID'] = trippedID
+		gcalStateEntry['eventsToday'] = eventsToday
+		gcalStateEntry['remainingEventsToday'] = remainingEventsToday
+		gcalStateEntry['upcomingEvent'] = upcomingEvent
+		gcalStatesChanged = True
 
 def list_calendars():
 	global cfg
-	global configChanged
+	global googleCalStatesChanged
+	global gcalStatesChanged
+
 	global createNewConfigEntry
 	while (len(cfg['calendars']['calendar']) < 1) or createNewConfigEntry:
 		createConfigEntry()
@@ -741,38 +1036,51 @@ def list_calendars():
 			createNewConfigEntry = False
 			cfg = load_config()
 
-	logMessage = 'Found a total of : ' + str(len(cfg['calendars']['calendar'])) + ' calendar configuration entries.\n'
+	logMessage = 'Found a total of : ' + str(len(cfg['calendars']['calendar'])) + ' GCal configuration entries.\n'
 	if isVerbose: logToDomoticz(MSG_INFO, logMessage)
 	if isVerbose: print logMessage
-
 	for c in cfg['calendars']['calendar']:
 		if c['enabled']:
-			elapsed = int((datetime.datetime.now() - datetime.datetime.strptime(c['lastCheck'], dateStrFmt)).total_seconds() / 60.0)
+
+			g = getGoogleCalendarAPIEntry(c)
+			if g == None:
+				print('Error: Can not find the Google Calendar API Entry for calendar: ' + c['calendarAddress'])
+				continue
+			googleCalStateEntry = getGoogleCalStateEntry(c)
+			gcalStateEntry = getGcalStateEntry(c)
+
+			elapsed = int((datetime.datetime.now() - datetime.datetime.strptime(googleCalStateEntry['lastCheck'], dateStrFmt)).total_seconds() / 60.0)
 
 			# Check if the raw Google Calendar Data json file exists, it might have disappeared, been deleted or whatever. Maybe it evaporated.
 			data_dir = os.path.join(cfg['system']['tmpFolder'], 'GCalData')
-			data_path = os.path.join(data_dir, str(c['calendarAddress']) + '.json')
-			jsonDataAvailable = True if os.path.isfile(data_path) else False
+			jsonCalFileName = os.path.join(data_dir, str(g['calendarAddress']) + '.json')
+			jsonDataAvailable = True if os.path.isfile(jsonCalFileName) else False
 
 			if elapsed >= c['interval'] or not jsonDataAvailable:
-				logMessage = 'Syncing Calendar data with Google: ' + c['shortName'] + '. Last fetched: ' + str(elapsed) + ' minutes ago. Interval: ' +str(c['interval'])
+				logMessage = 'Syncing Calendar data with Google: ' + g['calendarAddress'] + '. Last fetched: ' + str(elapsed) + ' minutes ago. Interval: ' +str(c['interval'])
 				logToDomoticz(MSG_INFO, logMessage)
 				if tty: print logMessage
-				syncWithGoogle(c)
-				c['lastCheck'] = datetime.datetime.now().strftime(dateStrFmt)
-				configChanged = True
+				syncWithGoogle(g)
+				googleCalStateEntry['lastCheck'] = datetime.datetime.now().strftime(dateStrFmt)
+				googleCalStatesChanged = True
 			else:
 				if isVerbose:
-					logMessage = 'Google Calendar data is up to date: ' + c['shortName'] + '. Last fetched: ' + str(elapsed) + ' minutes ago. Interval: ' +str(c['interval'])
+					logMessage = 'Google Calendar data is up to date: ' + g['calendarAddress'] + '. Last fetched: ' + str(elapsed) + ' minutes ago. Interval: ' +str(c['interval'])
 					logToDomoticz(MSG_INFO, logMessage)
 					print logMessage
-			process_calendar(c)
+			process_calendar(c, g, googleCalStateEntry, gcalStateEntry)
 
-	if configChanged:
-		logMessage = 'Config changed... Needs to save'
+	if googleCalStatesChanged:
+		logMessage = 'Google Calendar states changed... Needs to save'
 		if tty: print logMessage
 		if isVerbose: logToDomoticz(MSG_INFO, logMessage)
-		saveConfigFile()
+		saveGoogleCalStates()
+
+	if gcalStatesChanged:
+		logMessage = 'GCal Calendar states changed... Needs to save'
+		if tty: print logMessage
+		if isVerbose: logToDomoticz(MSG_INFO, logMessage)
+		saveGcalStates()
 
 def print_help(argv):
 	print 'usage: ' + os.path.basename(__file__) + ' [option] [-C domoticzDeviceidx|all] \nOptions and arguments'
@@ -811,13 +1119,17 @@ def main(argv):
 	if isDebug: print 'Debug is on'
 	if not tty: time.sleep( 5 ) # Give Domoticz some time to settle down from other commands running exactly at the 00 sec
 	global cfg; cfg = load_config()
-	global logFile; logFile = os.path.join(cfg['system']['tmpFolder'], os.path.basename(sys.argv[0]) + '.log')
+	global googleCalStates; googleCalStates = loadGoogleCalStates()
+	global gcalStates; gcalStates = loadGCalStates()
+	#global logFile; logFile = os.path.join(cfg['system']['tmpFolder'], os.path.basename(sys.argv[0]) + '.log')
 
 	if not connected_to_internet():
 		logToDomoticz(MSG_ERROR, 'No internet connection available')
 		sys.exit(0)
 
 	msgProgInfo = APPLICATION_NAME + ' Version ' + VERSION
+	msgProgInfo += ' (DB version ' + cfg['GCal']['dbVersion'] + ')'
+	
 	msgProgInfo += ' running on TTY console...' if tty else ' running as a CRON job...'
 	logToDomoticz(MSG_EXEC, msgProgInfo)
 	if isVerbose: print msgProgInfo
