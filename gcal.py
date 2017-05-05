@@ -38,7 +38,7 @@ newDevicesList = [] # This is a python list
 APPLICATION_NAME = 'Google Calendar API for Domoticz'
 
 SCOPES = 'https://www.googleapis.com/auth/calendar.readonly'
-VERSION = '0.2.0'
+VERSION = '0.2.1'
 DB_VERSION = '1.0.0'
 MSG_ERROR = 'Error'
 MSG_INFO = 'Info'
@@ -421,9 +421,10 @@ def createConfigEntry():
 	if query_yes_no('Ignore all day events', 'no'):
 		entry['ignoreAllDayEvent'] = True
 
-	# Set this to false so that back-to-back events with the same name will be treated as one long event. Useful for repeating all-day events. Default is true.
+	# Set this to false so that back-to-back events with the same name will be treated as one long event,
+	# hence preventing repeating and adjacent all-day events to trip multiple times. Default is False.
 	entry['retrip'] = False
-	if query_yes_no('Treat back-to-back events with the same name as one long event', 'yes'):
+	if query_yes_no('Retrip adjacent events with the same name', 'no'):
 		entry['retrip'] = True
 
 	domoSwitchDeviceName = 'GCal ' + entry['shortName']
@@ -511,15 +512,20 @@ def createConfigEntry():
 
 	return entry
 
-def updateDomoSwitchDevice(c, tripped, trippedID, gcalStateEntry):
+def updateDomoSwitchDevice(c, tripped, trippedID, trippedEvent, gcalStateEntry):
 	if not c['enabled']:
 		return
 
 	reTrip = False
-	# gcalStateEntry still holds the previous value
-	if tripped and gcalStateEntry['tripped'] and (gcalStateEntry['trippedID'] !=  trippedID) and c['retrip']:
-		# Old event still tripped. Now there is a new event that is also tripped.
-		reTrip = True
+	if tripped:
+		if gcalStateEntry['tripped']: # It is already tripped before, shall we reTrip it?
+			if gcalStateEntry['trippedID'] != trippedID: # The event ID has changed
+				if (gcalStateEntry['trippedEvent'].decode('utf-8') ==  trippedEvent): # The event ID has changed but the event name is the same
+					if c['retrip']: # Retrip adjacent events with the same name
+						reTrip = True
+				else:
+					# It is already tripped before but now with a different id and a new name
+					reTrip = True
 
 	# Get the current switch device value from Domoticz
 	payload = dict([('type', 'devices'), ('rid', c['domoticzSwitchIdx'])])
@@ -538,12 +544,11 @@ def updateDomoSwitchDevice(c, tripped, trippedID, gcalStateEntry):
 		payload = dict([('type', 'command'), ('param', 'switchlight'), ('idx', c['domoticzSwitchIdx']), \
 									('switchcmd', newValue)])
 		r = domoticzAPI(payload)
-		domoCompareValue == 'Off'
+		domoCompareValue = 'Off'
 		time.sleep(5) # delays for 5 seconds
 		# TODO: Try to schedule the next job instead of having a delay here
 
 	newValue = 'On' if tripped else 'Off'
-
 	valueChanged = True if (newValue <> domoCompareValue) else False
 
 	if isDebug:
@@ -957,16 +962,16 @@ def process_calendar(c, g, googleCalStateEntry, gcalStateEntry):
 		startDateTime = startDateTime + datetime.timedelta(minutes=c['startDelta'])
 		endDateTime = endDateTime + datetime.timedelta(minutes=c['endDelta'])
 
-		# Subtract 1 minute from endDateTime so that it will hold the last minute that the event is considered active
-		endDateTimeMinus1min = endDateTime - datetime.timedelta(seconds=60)
+		# Subtract 1 second from endDateTime so that it will hold the last second that the event is considered active
+		endDateTimeMinus1Sec = endDateTime - datetime.timedelta(seconds=1)
 
-		if domoticzNow.date() == startDateTime.date() or domoticzNow.date() == endDateTimeMinus1min.date():
+		if domoticzNow.date() == startDateTime.date() or domoticzNow.date() == endDateTimeMinus1Sec.date():
 			eventsToday = eventsToday + 1
-			if domoticzNow <= endDateTimeMinus1min:
+			if domoticzNow <= endDateTimeMinus1Sec:
 				remainingEventsToday = remainingEventsToday + 1
 
 		if trippedEvent == None and upcomingEvent == None:
-			withinEvent = True if (domoticzNow >= startDateTime) and (domoticzNow <= endDateTimeMinus1min) else False
+			withinEvent = True if (domoticzNow >= startDateTime) and (domoticzNow <= endDateTimeMinus1Sec) else False
 			if startDateTime.hour == 0 and startDateTime.minute == 0 and endDateTime.hour == 0 and endDateTime.minute == 0:
 				eventTimeText = startDateTime.strftime('%Y-%m-%d. (All day event)')
 			else:
@@ -1006,7 +1011,7 @@ def process_calendar(c, g, googleCalStateEntry, gcalStateEntry):
 
 	updateDomoUserVars(c, eventsToday, remainingEventsToday, trippedEvent)
 	updateDomoTextDevice(c, eventInfoText)
-	updateDomoSwitchDevice(c, tripped, trippedID, gcalStateEntry)
+	updateDomoSwitchDevice(c, tripped, trippedID, trippedEvent, gcalStateEntry)
 
 	if gcalStateEntry['tripped'] != tripped \
 	or gcalStateEntry['trippedEvent'] != trippedEvent \
