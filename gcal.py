@@ -38,7 +38,7 @@ newDevicesList = [] # This is a python list
 APPLICATION_NAME = 'Google Calendar API for Domoticz'
 
 SCOPES = 'https://www.googleapis.com/auth/calendar.readonly'
-VERSION = '0.2.1'
+VERSION = '0.2.2'
 DB_VERSION = '1.0.0'
 MSG_ERROR = 'Error'
 MSG_INFO = 'Info'
@@ -937,6 +937,8 @@ def process_calendar(c, g, googleCalStateEntry, gcalStateEntry):
 		elif 'dateTime' in e['start']:
 			startDateTime = parser.parse(e['start']['dateTime'])
 			endDateTime = parser.parse(e['end']['dateTime'])
+			if startDateTime == endDateTime: # Add 1 minute to zero time event's end time
+				endDateTime = endDateTime + datetime.timedelta(minutes=1)
 
 		# Deal with keyword filtering
 		if c['keyword'] != '':
