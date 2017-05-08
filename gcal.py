@@ -38,7 +38,7 @@ newDevicesList = [] # This is a python list
 APPLICATION_NAME = 'Google Calendar API for Domoticz'
 
 SCOPES = 'https://www.googleapis.com/auth/calendar.readonly'
-VERSION = '0.2.3'
+VERSION = '0.2.4'
 DB_VERSION = '1.0.1'
 MSG_ERROR = 'Error'
 MSG_INFO = 'Info'
@@ -780,6 +780,7 @@ def loadGoogleCalStates():
 	#  this file is dispensable and will be recreated if necessary hence can be stored on a tmpfs drive.
 
 	global googleCalStatesChanged
+	global googleCalStates
 	data_dir = os.path.join(cfg['system']['tmpFolder'], 'GCalData')
 	jsonGoogleCalStateFileName = os.path.join(data_dir, 'google_calendar_states.json')
 	try:
