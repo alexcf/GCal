@@ -39,7 +39,7 @@ APPLICATION_NAME = 'Google Calendar API for Domoticz'
 
 SCOPES = 'https://www.googleapis.com/auth/calendar.readonly'
 VERSION = '0.2.2'
-DB_VERSION = '1.0.0'
+DB_VERSION = '1.0.1'
 MSG_ERROR = 'Error'
 MSG_INFO = 'Info'
 MSG_EXEC = 'Exec info'
@@ -140,6 +140,8 @@ def create_config():
 			default_input('That isn\'t a valid time zone! Press any key to see a list of all valid zones', '')
 			for tz in pytz.all_timezones:
 				print tz
+	cfg['domoticz']['textDevStartTimeFmt'] = default_input('Domoticz text device Start Time format', '%Y-%m-%d. From %H:%M to ')
+	cfg['domoticz']['textDevEndTimeFmt'] = default_input('Domoticz text device End Time format', '%H:%M')
 	cfg['domoticz']['hostName'] = default_input('Domoticz web interface IP address (or host name)', local_ip_address)
 	cfg['domoticz']['portNumber'] = default_input('Domoticz web interface port number', 8080)
 	cfg['domoticz']['protocol'] = ''
@@ -262,9 +264,10 @@ def domoticzAPI(payload):
 	except:
 		if tty: print('Can not open domoticz URL: \'' + cfg['domoticz']['protocol'] + '://' + cfg['domoticz']['hostName'] + ':' + \
 										 str(cfg['domoticz']['portNumber']) + '/json.htm\'', sys.exc_info()[0])
+		if tty: print r.url
 		sys.exit(0)
 	if r.status_code <> 200:
-		if tty: print 'Unexpected status code from Domoticz: ' + r.status_code
+		if tty: print 'Unexpected status code from Domoticz: ' + r.status_code + ' Url: ' + r.url
 		sys.exit(0)
 	try:
 		rJsonDecoded = r.json()
@@ -272,7 +275,7 @@ def domoticzAPI(payload):
 		if tty: print('Can\'t Json decode response from Domoticz.', sys.exc_info()[0])
 		sys.exit(0)
 	if rJsonDecoded['status'] <> 'OK':
-		if tty: print 'Unexpected response from Domoticz: ' + rJsonDecoded['status']
+		if tty: print 'Unexpected response from Domoticz: ' + rJsonDecoded['status'] + ' Url: ' + r.url
 		sys.exit(0)
 	return rJsonDecoded
 
@@ -975,9 +978,18 @@ def process_calendar(c, g, googleCalStateEntry, gcalStateEntry):
 		if trippedEvent == None and upcomingEvent == None:
 			withinEvent = True if (domoticzNow >= startDateTime) and (domoticzNow <= endDateTimeMinus1Sec) else False
 			if startDateTime.hour == 0 and startDateTime.minute == 0 and endDateTime.hour == 0 and endDateTime.minute == 0:
-				eventTimeText = startDateTime.strftime('%Y-%m-%d. (All day event)')
+				try:
+					eventTimeText = startDateTime.strftime(cfg['domoticz']['textDevAllDayEventFmt'])
+				except:
+					if tty: print('[\'domoticz\'][\'textDevAllDayEventFmt\'] is missing or faulty. Using the default value.')
+					eventTimeText = startDateTime.strftime('%Y-%m-%d. (All day event)')
 			else:
-				eventTimeText = startDateTime.strftime('%Y-%m-%d. From %H:%M') + ' to ' + endDateTime.strftime('%H:%M')
+				try:
+					eventTimeText = startDateTime.strftime(cfg['domoticz']['textDevStartTimeFmt']) + \
+													endDateTime.strftime(cfg['domoticz']['textDevEndTimeFmt'])
+				except:
+					if tty: print('[\'domoticz\'][\'textDevStartTimeFmt\'] or [\'domoticz\'][\'textDevStartTimeFmt\'] are missing or faulty.')
+					eventTimeText = startDateTime.strftime('%Y-%m-%d. From %H:%M to ') + endDateTime.strftime('%H:%M')
 			if withinEvent:
 				tripped = True
 				trippedEvent = e['summary']
