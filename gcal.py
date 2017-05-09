@@ -38,7 +38,7 @@ newDevicesList = [] # This is a python list
 APPLICATION_NAME = 'Google Calendar API for Domoticz'
 
 SCOPES = 'https://www.googleapis.com/auth/calendar.readonly'
-VERSION = '0.2.6'
+VERSION = '0.2.7'
 DB_VERSION = '1.0.1'
 MSG_ERROR = 'Error'
 MSG_INFO = 'Info'
@@ -52,6 +52,7 @@ lastClientID = ''
 lastClientSecret = ''
 dateStrFmt = '%Y-%m-%d %H:%M:%S'
 gCaldateStrFmt = '%Y-%m-%dT%H:%M:%S'
+TEXT_DEV_NO_EVENT = 'No event'
 
 def query_yes_no(question, default="no"):
 	valid = {"yes": True, "y": True, "ye": True,
@@ -574,7 +575,7 @@ def updateDomoSwitchDevice(c, tripped, trippedID, trippedEvent, gcalStateEntry):
 	r = domoticzAPI(payload)
 
 def updateDomoUserVars(c, eventsToday, remainingEventsToday, trippedEvent):
-	if trippedEvent == None: trippedEvent = 'X'
+	if trippedEvent == None: trippedEvent = TEXT_DEV_NO_EVENT
 	userVariableType = 0 # Integer
 	varName = 'GCal-' + c['shortName'] + '-eventsToday'
 	updateDomoUserVar(userVariableType, c['domoticzUVEventsTodayIdx'], varName, eventsToday)
