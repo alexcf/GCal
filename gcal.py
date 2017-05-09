@@ -38,7 +38,7 @@ newDevicesList = [] # This is a python list
 APPLICATION_NAME = 'Google Calendar API for Domoticz'
 
 SCOPES = 'https://www.googleapis.com/auth/calendar.readonly'
-VERSION = '0.2.4'
+VERSION = '0.2.5'
 DB_VERSION = '1.0.1'
 MSG_ERROR = 'Error'
 MSG_INFO = 'Info'
@@ -276,6 +276,7 @@ def domoticzAPI(payload):
 		sys.exit(0)
 	if rJsonDecoded['status'] <> 'OK':
 		if tty: print 'Unexpected response from Domoticz: ' + rJsonDecoded['status'] + ' Url: ' + r.url
+		if tty: print payload
 		sys.exit(0)
 	return rJsonDecoded
 
@@ -539,7 +540,7 @@ def updateDomoSwitchDevice(c, tripped, trippedID, trippedEvent, gcalStateEntry):
 		print errMess
 		logToDomoticz(MSG_ERROR, errMess)
 		return
-
+	# print r.keys(), r.values()
 	domoCompareValue = r['result'][0]['Status']
 
 	if reTrip and domoCompareValue == 'On':
