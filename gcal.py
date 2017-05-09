@@ -38,7 +38,7 @@ newDevicesList = [] # This is a python list
 APPLICATION_NAME = 'Google Calendar API for Domoticz'
 
 SCOPES = 'https://www.googleapis.com/auth/calendar.readonly'
-VERSION = '0.2.5'
+VERSION = '0.2.6'
 DB_VERSION = '1.0.1'
 MSG_ERROR = 'Error'
 MSG_INFO = 'Info'
@@ -574,7 +574,7 @@ def updateDomoSwitchDevice(c, tripped, trippedID, trippedEvent, gcalStateEntry):
 	r = domoticzAPI(payload)
 
 def updateDomoUserVars(c, eventsToday, remainingEventsToday, trippedEvent):
-	if trippedEvent == None: trippedEvent = ''
+	if trippedEvent == None: trippedEvent = 'X'
 	userVariableType = 0 # Integer
 	varName = 'GCal-' + c['shortName'] + '-eventsToday'
 	updateDomoUserVar(userVariableType, c['domoticzUVEventsTodayIdx'], varName, eventsToday)
@@ -602,14 +602,20 @@ def updateDomoUserVar(userVariableType, idx, varName, newValue):
 	if newValue <> domoCompareValue: valueChanged = True
 	if isDebug:
 		print 'User variable: ' + r['result'][0]['Name']
-		print 'N: ' + str(newValue)
-		print 'D: ' + str(domoCompareValue)
+		try:
+			print 'N: ' + str(newValue)
+			print 'D: ' + str(domoCompareValue)
+		except:
+			print 'ascii codec can\'t encode characters, skipping printing that on screen'
 		print
 	elif isVerbose and valueChanged:
 		sayThis = 'Updating Domoticz user variable \'' + r['result'][0]['Name'] + '\' idx: ' + str(idx) + ' due to:'
 		if valueChanged: sayThis += ' <value changed>. New value is: ' + str(newValue) + \
 																'. Old value was: ' + str(domoCompareValue) + '.'
-		print sayThis
+		try:
+			print sayThis
+		except:
+			print 'ascii codec can\'t encode characters, so skipping printing that on screen'
 
 	if not valueChanged:
 		return
