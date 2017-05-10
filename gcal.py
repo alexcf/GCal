@@ -38,7 +38,7 @@ newDevicesList = [] # This is a python list
 APPLICATION_NAME = 'Google Calendar API for Domoticz'
 
 SCOPES = 'https://www.googleapis.com/auth/calendar.readonly'
-VERSION = '0.2.7'
+VERSION = '0.2.8'
 DB_VERSION = '1.0.1'
 MSG_ERROR = 'Error'
 MSG_INFO = 'Info'
@@ -714,13 +714,25 @@ def syncWithGoogle(g):
 	cred_args = []
 	cred_args.append('--noauth_local_webserver')
 
-	#timeMin = (datetime.datetime.utcnow() + datetime.timedelta(minutes=c['endDelta']) - datetime.timedelta(hours=24)) # Limit for historical events
-	#timeMax = (datetime.datetime.utcnow() + datetime.timedelta(minutes=c['startDelta']) + datetime.timedelta(hours=24)) # Limit for future events
-	#timeMax = timeMax + datetime.timedelta(minutes=c['interval']) # Add the update interval to timeMax
-	# TODO:
-	timeMin = (datetime.datetime.utcnow() + datetime.timedelta(minutes=180) - datetime.timedelta(hours=24)) # Limit for historical events
-	timeMax = (datetime.datetime.utcnow() + datetime.timedelta(minutes=180) + datetime.timedelta(hours=24)) # Limit for future events
-	timeMax = timeMax + datetime.timedelta(minutes=180) # Add the update interval to timeMax
+	# Several GCal entries may use this Google Calendar.
+	# Find out the extreme values for startDelta and endDelta so we can determine how much data we need to fetch
+	minStartDelta = 0
+	maxEndDelta = 0
+	maxInterval = 0
+	for c in cfg['calendars']['calendar']:
+		if c['calendarAddress'] == g['calendarAddress']:
+			if c['startDelta'] < minStartDelta:
+				minStartDelta = c['startDelta']
+			if c['endDelta'] > maxEndDelta:
+				maxEndDelta = c['endDelta']
+			if c['interval'] > maxInterval:
+				maxInterval = c['interval']
+
+	# We won't need to fetch calendar entries older that last midnight + minStartDelta (which might be negative though)
+	midnight = datetime.datetime.utcnow().replace(minute=0, hour=0, second=0, microsecond=0)
+	timeMin = (midnight + datetime.timedelta(minutes=minStartDelta)) # Limit for historical events
+	timeMax = (datetime.datetime.utcnow() + datetime.timedelta(minutes=maxEndDelta) + datetime.timedelta(hours=24)) # Limit for future events
+	timeMax = timeMax + datetime.timedelta(minutes=maxInterval) # Add the update interval to timeMax
 
 	timeMin = timeMin.isoformat() + 'Z'
 	timeMax = timeMax.isoformat() + 'Z'
