@@ -38,7 +38,7 @@ newDevicesList = [] # This is a python list
 APPLICATION_NAME = 'Google Calendar API for Domoticz'
 
 SCOPES = 'https://www.googleapis.com/auth/calendar.readonly'
-VERSION = '0.2.8'
+VERSION = '0.3.0'
 DB_VERSION = '1.0.1'
 MSG_ERROR = 'Error'
 MSG_INFO = 'Info'
@@ -47,6 +47,7 @@ CAL_NO_FUTURE_EVENTS = 'No future events found'
 tty = True if os.isatty(sys.stdin.fileno()) else False
 isDebug = False
 isVerbose = False
+reConfigure = False
 lastCredentials = None
 lastClientID = ''
 lastClientSecret = ''
@@ -98,9 +99,10 @@ def default_input(message, defaultVal):
 	else:
 		answer = raw_input("%s :" % (message))
 	if isinstance(answer, basestring):
-		return answer.strip()
+		return answer.strip().decode('utf-8')
 	else:
 		return answer
+	# Work with Unicode strings internally, converting to a particular encoding on output.
 
 def getGoogleCalendarAPIEntry(c):
 	# Return the googleCalendarAPI entry for the GCal Calendar entry
@@ -111,66 +113,161 @@ def getGoogleCalendarAPIEntry(c):
 
 def saveConfigFile():
 	global configChanged
-	with io.open(cfgFile, 'w', encoding='utf-8') as outfile:
-		my_json_str = json.dumps(cfg, ensure_ascii=False, indent=2, sort_keys=True)
-		if isinstance(my_json_str, str): # Python 2.x JSON module gives either Unicode or str depending on the contents of the object.
-			my_json_str = my_json_str.decode('utf-8')
-		outfile.write(my_json_str)
-		configChanged = False
+	try:
+		to_unicode = unicode
+	except NameError:
+		to_unicode = str
+
+	# Write JSON file
+	with io.open(cfgFile, 'w', encoding='utf8') as outfile:
+		str_ = json.dumps(cfg,
+											indent=2, sort_keys=True,
+											separators=(',', ': '), ensure_ascii=False)
+		outfile.write(to_unicode(str_))
+
+	configChanged = False
+
+def enterConfigDomoticzTimeZone():
+	global cfg
+	if not 'timeZone' in cfg['domoticz']: cfg['domoticz']['timeZone'] = ''
+	anAnswer = ''
+	print '\nThe following question will be about what Time Zone your Domoticz installation operates in. Normally that is the time zone where you live.\n'
+	if query_yes_no('Would you like to see a list of all valid time zones', 'yes'):
+		for tz in pytz.all_timezones:
+			print tz
+		print
+	
+	defaultVal = cfg['domoticz']['timeZone'] if cfg['domoticz']['timeZone'] != '' else ''
+	while not anAnswer in pytz.all_timezones:
+		anAnswer = default_input('Domoticz Time Zone', defaultVal)
+		if not anAnswer in pytz.all_timezones:
+			if query_yes_no('That isn\'t a valid time zone! You should write it exactly as it appears in the list. Would you like to see the list of all valid time zones', 'yes'):
+				for tz in pytz.all_timezones:
+					print tz
+				print
+	cfg['domoticz']['timeZone'] = anAnswer
+
+def enterConfigDomoticzTextDevStartTimeFmt():
+	global cfg
+	if not 'textDevStartTimeFmt' in cfg['domoticz']: cfg['domoticz']['textDevStartTimeFmt'] = ''
+	defaultVal = cfg['domoticz']['textDevStartTimeFmt'] if cfg['domoticz']['textDevStartTimeFmt'] != '' else '%Y-%m-%d. From %H:%M to '
+	cfg['domoticz']['textDevStartTimeFmt'] = default_input('Domoticz text device Start Time format', defaultVal)
+
+def enterConfigDomoticzTextDevEndTimeFmt():
+	global cfg
+	if not 'textDevEndTimeFmt' in cfg['domoticz']: cfg['domoticz']['textDevEndTimeFmt'] = ''
+	defaultVal = cfg['domoticz']['textDevEndTimeFmt'] if cfg['domoticz']['textDevEndTimeFmt'] != '' else '%H:%M'
+	cfg['domoticz']['textDevEndTimeFmt'] = default_input('Domoticz text device End Time format', defaultVal)
+
+def enterConfigDomoticzHostName():
+	global cfg
+	import socket
+	s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+	s.connect(('8.8.8.8', 0))	# connecting to a UDP address doesn't send packets
+	local_ip_address = s.getsockname()[0]
+
+	if not 'hostName' in cfg['domoticz']: cfg['domoticz']['hostName'] = ''
+	defaultVal = cfg['domoticz']['hostName'] if cfg['domoticz']['hostName'] != '' else local_ip_address
+	cfg['domoticz']['hostName'] = default_input('Domoticz web interface IP address (or host name)', defaultVal)
+
+def enterConfigDomoticzPortNumber():
+	global cfg
+	if not 'portNumber' in cfg['domoticz']: cfg['domoticz']['portNumber'] = 0
+	defaultVal = cfg['domoticz']['portNumber'] if cfg['domoticz']['portNumber'] != '' else 8080
+	goodInput = False
+	while not goodInput:
+		try:
+			cfg['domoticz']['portNumber'] = default_input('Domoticz web interface port number', defaultVal)
+			if cfg['domoticz']['portNumber'] > 0 and cfg['domoticz']['portNumber'] < 65536:
+				goodInput = True
+			else:
+				print("That's not a valid port number. Try again: ")
+		except ValueError:
+			print('That\'s not an integer. Try again: ')
+
+def enterConfigDomoticzProtocol():
+	global cfg
+	if not 'protocol' in cfg['domoticz']: cfg['domoticz']['protocol'] = ''
+	defaultVal = cfg['domoticz']['protocol'] if cfg['domoticz']['protocol'] != '' else 'http'
+	goodInput = False
+	while not goodInput:
+		cfg['domoticz']['protocol'] = default_input('Domoticz web interface communication protocol (http or https)', defaultVal)
+		if cfg['domoticz']['protocol'] == 'http' or cfg['domoticz']['protocol'] == 'https':
+			goodInput = True
+		else:
+			print('That\'s not a valid protocol. Try again: ')
+
+def enterConfigDomoticzUserName():
+	global cfg
+	if not 'userName' in cfg['domoticz']['httpBasicAuth']: cfg['domoticz']['httpBasicAuth']['userName'] = ''
+	defaultVal = cfg['domoticz']['httpBasicAuth']['userName'] if cfg['domoticz']['httpBasicAuth']['userName'] != '' else ''
+	cfg['domoticz']['httpBasicAuth']['userName'] = \
+					default_input('Domoticz web interface user name (leave blank if no username is needed)', defaultVal)
+
+def enterConfigDomoticzPassWord():
+	global cfg
+	if not 'passWord' in cfg['domoticz']['httpBasicAuth']: cfg['domoticz']['httpBasicAuth']['passWord'] = ''
+	defaultVal = cfg['domoticz']['httpBasicAuth']['passWord'] if cfg['domoticz']['httpBasicAuth']['passWord'] != '' else ''
+	cfg['domoticz']['httpBasicAuth']['passWord'] = \
+					default_input('Domoticz web interface password (leave blank if no password is needed)', defaultVal)
+
+def enterConfigDomoticzScpHost():
+	global cfg
+	if not 'scpHost' in cfg['domoticz']: cfg['domoticz']['scpHost'] = ''
+	defaultVal = cfg['domoticz']['scpHost'] if cfg['domoticz']['scpHost'] != '' else ''
+	cfg['domoticz']['scpHost'] = \
+					default_input('Send calendar data with SCP to username@host (leave blank if domoticz is installed on this machine)', defaultVal)
+
+def enterConfigDomoticzScpDir():
+	global cfg
+	if not 'scpDir' in cfg['domoticz']: cfg['domoticz']['scpDir'] = ''
+	defaultVal = cfg['domoticz']['scpDir'] if cfg['domoticz']['scpDir'] != '' else ''
+	cfg['domoticz']['scpDir'] = \
+					default_input('Send calendar data with SCP to remote directory (leave blank if domoticz is installed on this machine)', defaultVal)
+
+def enterConfigTmpFolder():
+	global cfg
+	tmpdir = '/var/tmp' if os.path.isdir('/var/tmp') else '/tmp'
+	if not 'tmpFolder' in cfg['system']: cfg['system']['tmpFolder'] = ''
+	defaultVal = cfg['system']['tmpFolder'] if cfg['system']['tmpFolder'] != '' else tmpdir
+	goodInput = False
+	while not goodInput:
+		cfg['system']['tmpFolder'] = default_input('Directory for app logging and storing access tokens', defaultVal)
+		if os.path.isdir(cfg['system']['tmpFolder']):
+			goodInput = True
+		else:
+			print('That isn\'t a valid directory name on your system! Try again: ')
 
 def create_config():
 	global cfg;cfg = {}
-	global configChanged
 
 	data_dir = os.path.join(sys.path[0], '.data')
 	if not os.path.exists(data_dir):
 		os.makedirs(data_dir)
 
-	import socket
-	s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-	s.connect(('8.8.8.8', 0))	# connecting to a UDP address doesn't send packets
-	local_ip_address = s.getsockname()[0]
 	cfg['GCal'] = {}
 	cfg['GCal']['dbVersion'] = DB_VERSION
 	cfg['domoticz'] = {}
-
-	cfg['domoticz']['timeZone'] = ''
-	while not cfg['domoticz']['timeZone'] in pytz.all_timezones:
-		cfg['domoticz']['timeZone'] = default_input('Domoticz Time Zone', 'Europe/Stockholm')
-		if not cfg['domoticz']['timeZone'] in pytz.all_timezones:
-			default_input('That isn\'t a valid time zone! Press any key to see a list of all valid zones', '')
-			for tz in pytz.all_timezones:
-				print tz
-	cfg['domoticz']['textDevStartTimeFmt'] = default_input('Domoticz text device Start Time format', '%Y-%m-%d. From %H:%M to ')
-	cfg['domoticz']['textDevEndTimeFmt'] = default_input('Domoticz text device End Time format', '%H:%M')
-	cfg['domoticz']['hostName'] = default_input('Domoticz web interface IP address (or host name)', local_ip_address)
-	cfg['domoticz']['portNumber'] = default_input('Domoticz web interface port number', 8080)
-	cfg['domoticz']['protocol'] = ''
-	while cfg['domoticz']['protocol'] <> 'http' and cfg['domoticz']['protocol'] <> 'https':
-		cfg['domoticz']['protocol'] = default_input('Domoticz web interface communication protocol (http or https)', 'http')
-		if cfg['domoticz']['protocol'] <> 'http' and cfg['domoticz']['protocol'] <> 'https':
-			print 'Invalid value given for Domoticz web interface communication protocol. It must be \'http\' or \'https\''
 	cfg['domoticz']['httpBasicAuth'] = {}
-	cfg['domoticz']['httpBasicAuth']['userName'] = \
-					default_input('Domoticz web interface user name (leave blank if no username is needed)', '')
-	cfg['domoticz']['httpBasicAuth']['passWord'] = \
-					default_input('Domoticz web interface password (leave blank if no password is needed)', '')
-	cfg['domoticz']['scpHost'] = \
-					default_input('Send calendar data with SCP to username@host (leave blank if domoticz is installed on this machine)', '')
-	cfg['domoticz']['scpDir'] = \
-					default_input('Send calendar data with SCP to remote directory (leave blank if domoticz is installed on this machine)', '')
 	cfg['calendars'] = {}
 	cfg['calendars']['calendar'] = []
 	cfg['googleCalendarAPI'] = {}
 	cfg['googleCalendarAPI']['calendar'] = []
-
 	cfg['system'] = {}
-	tmpdir = '/var/tmp' if os.path.isdir('/var/tmp') else '/tmp'
-	cfg['system']['tmpFolder'] = '/xxxx/yyyy'
-	while not os.path.isdir(cfg['system']['tmpFolder']):
-		cfg['system']['tmpFolder'] = default_input('Directory for app logging and storing access tokens', tmpdir)
-		if not os.path.isdir(cfg['system']['tmpFolder']):
-			print 'That isn\'t a valid directory name on your system! Please try again.'
+
+	enterConfigDomoticzTimeZone()
+	enterConfigDomoticzTextDevStartTimeFmt()
+	enterConfigDomoticzTextDevEndTimeFmt()
+	enterConfigDomoticzHostName()
+	enterConfigDomoticzPortNumber()
+	enterConfigDomoticzProtocol()
+	enterConfigDomoticzUserName()
+	enterConfigDomoticzPassWord()
+	enterConfigDomoticzScpHost()
+	enterConfigDomoticzScpDir()
+	enterConfigTmpFolder()
+
+
 	# Do we already have a hardware device named 'Google Calendar' in Domoticz?
 	payload = dict([('type', 'hardware')])
 	r = domoticzAPI(payload)
@@ -237,11 +334,6 @@ def load_config():
 	try:
 		with open(cfgFile) as json_data_file:
 			cfg = json.load(json_data_file)
-			# I would love to have a better looking solution to convert it all to UTF-8
-			# Unless doing this i will get: UnicodeWarning: Unicode equal comparison failed to convert both arguments to Unicode
-			for c in cfg['calendars']['calendar']:
-				c['shortName'] = c['shortName'].encode('utf8')
-				c['keyword'] = c['keyword'].encode('utf8')
 	except IOError:
 		# Create a new config file
 		if tty:
@@ -511,9 +603,7 @@ def createConfigEntry():
 	if 'calendarAddress' in apiEntry:
 		cfg['googleCalendarAPI']['calendar'].append(apiEntry)
 
-	with open(cfgFile, 'w') as outfile:
-		json.dump(cfg, outfile, indent=2, sort_keys=True, separators=(',', ':'))
-	configChanged = False
+	saveConfigFile()
 
 	return entry
 
@@ -843,11 +933,18 @@ def saveGoogleCalStates():
 	data_dir = os.path.join(cfg['system']['tmpFolder'], 'GCalData')
 	jsonGoogleCalStateFileName = os.path.join(data_dir, 'google_calendar_states.json')
 
-	with io.open(jsonGoogleCalStateFileName, 'w', encoding='utf-8') as outfile:
-		my_json_str = json.dumps(googleCalStates, ensure_ascii=False, indent=2, sort_keys=True)
-		if isinstance(my_json_str, str): # Python 2.x JSON module gives either Unicode or str depending on the contents of the object.
-			my_json_str = my_json_str.decode('utf-8')
-		outfile.write(my_json_str)
+	try:
+		to_unicode = unicode
+	except NameError:
+		to_unicode = str
+
+	# Write JSON file
+	with io.open(jsonGoogleCalStateFileName, 'w', encoding='utf8') as outfile:
+		str_ = json.dumps(googleCalStates,
+											indent=2, sort_keys=True,
+											separators=(',', ': '), ensure_ascii=False)
+		outfile.write(to_unicode(str_))
+
 	googleCalStatesChanged = False
 
 	# Copy the json data to remote host if applicable
@@ -911,11 +1008,18 @@ def saveGcalStates():
 	data_dir = os.path.join(cfg['system']['tmpFolder'], 'GCalData')
 	jsonGcalStateFileName = os.path.join(data_dir, 'gcal_calendar_states.json')
 
-	with io.open(jsonGcalStateFileName, 'w', encoding='utf-8') as outfile:
-		my_json_str = json.dumps(gcalStates, ensure_ascii=False, indent=2, sort_keys=True)
-		if isinstance(my_json_str, str): # Python 2.x JSON module gives either Unicode or str depending on the contents of the object.
-			my_json_str = my_json_str.decode('utf-8')
-		outfile.write(my_json_str)
+	try:
+		to_unicode = unicode
+	except NameError:
+		to_unicode = str
+
+	# Write JSON file
+	with io.open(jsonGcalStateFileName, 'w', encoding='utf8') as outfile:
+		str_ = json.dumps(gcalStates,
+											indent=2, sort_keys=True,
+											separators=(',', ': '), ensure_ascii=False)
+		outfile.write(to_unicode(str_))
+
 	gcalStatesChanged = False
 
 	# Copy the json data to remote host if applicable
@@ -1006,7 +1110,7 @@ def process_calendar(c, g, googleCalStateEntry, gcalStateEntry):
 					eventTimeText = startDateTime.strftime('%Y-%m-%d. (All day event)')
 			else:
 				try:
-					eventTimeText = startDateTime.strftime(cfg['domoticz']['textDevStartTimeFmt']) + \
+					eventTimeText = startDateTime.strftime(cfg['domoticz']['textDevStartTimeFmt']) + ' ' + \
 													endDateTime.strftime(cfg['domoticz']['textDevEndTimeFmt'])
 				except:
 					if tty: print('[\'domoticz\'][\'textDevStartTimeFmt\'] or [\'domoticz\'][\'textDevStartTimeFmt\'] are missing or faulty.')
@@ -1076,7 +1180,7 @@ def list_calendars():
 			createNewConfigEntry = False
 			cfg = load_config()
 
-	logMessage = 'Found a total of : ' + str(len(cfg['calendars']['calendar'])) + ' GCal configuration entries.\n'
+	logMessage = 'Found a total of : ' + str(len(cfg['calendars']['calendar'])) + ' GCal entries.\n'
 	if isVerbose: logToDomoticz(MSG_INFO, logMessage)
 	if isVerbose: print logMessage
 	for c in cfg['calendars']['calendar']:
@@ -1122,6 +1226,62 @@ def list_calendars():
 		if isVerbose: logToDomoticz(MSG_INFO, logMessage)
 		saveGcalStates()
 
+def reconfigure_gcal_entry(c):
+	global cfg
+	if query_yes_no('Would you like to reconfigure the GCal Entry with short name: ' + c['shortName'] , 'no'):
+		print 'Edit'
+	#enterConfigDomoticzTimeZone()
+
+def delete_gcal_entry(c):
+	global cfg
+	if query_yes_no('Would you like to DELETE the GCal Entry with short name: ' + c['shortName'] , 'no'):
+		if query_yes_no('WARNING! This action can not be reverted. Are you sure that you like to DELETE the GCal Entry with short name: ' \
+					+ c['shortName'] , 'no'):
+			print 'DEEEEEEEEEEEEEEELETE'
+			return
+	#enterConfigDomoticzTimeZone()
+
+def reconfigure_gcal():
+	global cfg
+	print '\nYou have requested to reconfigure GCal. First You have the option to alter the common GCal settings. For each setting you will be prompted with its current value and you will be able to alter it. After that, for each previously defined GCal entry, you will have the choice to delete it or to reconfigure it.\n'
+	if not query_yes_no('Are You sure that you\'d like to reconfigure GCal now', 'no'):
+		sys.exit(0)
+
+	if query_yes_no('Would you like to reconfigure the common GCal settings now', 'no'):
+		enterConfigDomoticzTimeZone()
+		enterConfigDomoticzTextDevStartTimeFmt()
+		enterConfigDomoticzTextDevEndTimeFmt()
+		enterConfigDomoticzHostName()
+		enterConfigDomoticzPortNumber()
+		enterConfigDomoticzProtocol()
+		enterConfigDomoticzUserName()
+		enterConfigDomoticzPassWord()
+		enterConfigDomoticzScpHost()
+		enterConfigDomoticzScpDir()
+		enterConfigTmpFolder()
+
+	print '\nWe will now go through all your defined GCal Entries.'
+	print 'You will have the option to either delete or to reconfigure each entry.\n'
+
+	print '\n\nEntering DELETE stage for GCal Entries'
+	for c in cfg['calendars']['calendar']:
+		delete_gcal_entry(c)
+		saveConfigFile()
+		load_config()
+
+	if len(cfg['calendars']['calendar']) < 1:
+		print '\nYou have deleted all your GCal entries. You should now run this command with the -c flag to create a GCal entry.'
+		sys.exit(0)
+
+	print '\n\nEntering reconfiguring stage for GCal Entries'
+	for c in cfg['calendars']['calendar']:
+		reconfigure_gcal_entry(c)
+
+	saveConfigFile()
+
+	print '\nGCal has been reconfigured'
+
+
 def print_help(argv):
 	print 'usage: ' + os.path.basename(__file__) + ' [option] [-C domoticzDeviceidx|all] \nOptions and arguments'
 	print '-d		 : debug output (also --debug)'
@@ -1129,16 +1289,18 @@ def print_help(argv):
 	print '-v		 : verbose'
 	print '-V		 : print the version number and exit (also --version)'
 	print '-c		 : create an additional GCal entry (also --create_gcal_entry)'
+	print '-r		 : reconfigure GCal (also --reConfigure)'
 
 def main(argv):
 	if os.geteuid() == 0:
 		sys.exit('\nThis script should not be run as user \'root\'\n')
 	global isDebug
 	global isVerbose
+	global reConfigure
 
 	global createNewConfigEntry;createNewConfigEntry = False
 	try:
-		opts, args = getopt.getopt(argv, 'dhvVc', ['help', 'debug', 'version', 'create_gcal_entry'])
+		opts, args = getopt.getopt(argv, 'dhvVcr', ['help', 'debug', 'version', 'create_gcal_entry', 'reconfigure'])
 	except getopt.GetoptError:
 		print_help(argv)
 		sys.exit(2)
@@ -1155,6 +1317,8 @@ def main(argv):
 			sys.exit(0)
 		elif opt in ("-c", "--create_gcal_entry"):
 			createNewConfigEntry = True
+		elif opt in ("-r", "--reconfigure"):
+			reConfigure = True
 
 	if isDebug: print 'Debug is on'
 	if not tty: time.sleep( 5 ) # Give Domoticz some time to settle down from other commands running exactly at the 00 sec
@@ -1169,10 +1333,13 @@ def main(argv):
 
 	msgProgInfo = APPLICATION_NAME + ' Version ' + VERSION
 	msgProgInfo += ' (DB version ' + cfg['GCal']['dbVersion'] + ')'
-	
+
 	msgProgInfo += ' running on TTY console...' if tty else ' running as a CRON job...'
 	logToDomoticz(MSG_EXEC, msgProgInfo)
 	if isVerbose: print msgProgInfo
+
+	if reConfigure and tty:
+		reconfigure_gcal()
 
 	list_calendars()
 	sys.exit(0)
