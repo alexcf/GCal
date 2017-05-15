@@ -34,7 +34,7 @@ newDevicesList = [] # This is a python list
 APPLICATION_NAME = 'Google Calendar API for Domoticz'
 
 SCOPES = 'https://www.googleapis.com/auth/calendar.readonly'
-VERSION = '0.3.0'
+VERSION = '0.3.1'
 DB_VERSION = '1.0.1'
 MSG_ERROR = 'Error'
 MSG_INFO = 'Info'
@@ -169,7 +169,7 @@ def enterConfigDomoticzHostName():
 def enterConfigDomoticzPortNumber():
 	global cfg
 	if not 'portNumber' in cfg['domoticz']: cfg['domoticz']['portNumber'] = 0
-	defaultVal = cfg['domoticz']['portNumber'] if cfg['domoticz']['portNumber'] != '' else 8080
+	defaultVal = cfg['domoticz']['portNumber'] if cfg['domoticz']['portNumber'] != 0 else 8080
 	goodInput = False
 	while not goodInput:
 		try:
