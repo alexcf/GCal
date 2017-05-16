@@ -34,7 +34,7 @@ newDevicesList = [] # This is a python list
 APPLICATION_NAME = 'Google Calendar API for Domoticz'
 
 SCOPES = 'https://www.googleapis.com/auth/calendar.readonly'
-VERSION = '0.3.1'
+VERSION = '0.9.0'
 DB_VERSION = '1.0.1'
 MSG_ERROR = 'Error'
 MSG_INFO = 'Info'
@@ -1222,24 +1222,18 @@ def list_calendars():
 		if isVerbose: logToDomoticz(MSG_INFO, logMessage)
 		saveGcalStates()
 
-def reconfigure_gcal_entry(c):
-	global cfg
-	if query_yes_no('Would you like to reconfigure the GCal Entry with short name: ' + c['shortName'] , 'no'):
-		print 'Edit'
-	#enterConfigDomoticzTimeZone()
-
 def delete_gcal_entry(c):
 	global cfg
 	if query_yes_no('Would you like to DELETE the GCal Entry with short name: ' + c['shortName'] , 'no'):
+		print 'Please be aware the virtual devices and user variables in Domoticz associated with this GCal entry will be removed if you continue.'
 		if query_yes_no('WARNING! This action can not be reverted. Are you sure that you like to DELETE the GCal Entry with short name: ' \
 					+ c['shortName'] , 'no'):
-			print 'DEEEEEEEEEEEEEEELETE'
-			return
-	#enterConfigDomoticzTimeZone()
+			return True
+	return False
 
 def reconfigure_gcal():
 	global cfg
-	print '\nYou have requested to reconfigure GCal. First You have the option to alter the common GCal settings. For each setting you will be prompted with its current value and you will be able to alter it. After that, for each previously defined GCal entry, you will have the choice to delete it or to reconfigure it.\n'
+	print '\nYou have requested to reconfigure GCal. First You have the option to alter the common GCal settings. For each setting you will be prompted with its current value and you will be able to alter it. After that, for each previously defined GCal entry, you will have the choice to delete it.\n'
 	if not query_yes_no('Are You sure that you\'d like to reconfigure GCal now', 'no'):
 		sys.exit(0)
 
@@ -1260,21 +1254,37 @@ def reconfigure_gcal():
 	print 'You will have the option to either delete or to reconfigure each entry.\n'
 
 	print '\n\nEntering DELETE stage for GCal Entries'
-	for c in cfg['calendars']['calendar']:
-		delete_gcal_entry(c)
-		saveConfigFile()
-		load_config()
+	for c in cfg['calendars']['calendar'][:]: # Iterate over a copy
+		if delete_gcal_entry(c):
+			cfg['calendars']['calendar'].remove(c)
+			for cs in cfg['googleCalendarAPI']['calendar'][:]:  # Iterate over a copy
+				if cs['calendarAddress'] == c['calendarAddress']:
+					cfg['googleCalendarAPI']['calendar'].remove(cs)
 
-	if len(cfg['calendars']['calendar']) < 1:
-		print '\nYou have deleted all your GCal entries. You should now run this command with the -c flag to create a GCal entry.'
-		sys.exit(0)
+			# Delete the Google Calendar file
+			data_dir = os.path.join(cfg['system']['tmpFolder'], 'GCalData')
+			jsonCalFileName = os.path.join(data_dir, str(c['calendarAddress']) + '.json')
+			try:
+				os.remove(jsonCalFileName)
+			except:
+				continue
 
-	print '\n\nEntering reconfiguring stage for GCal Entries'
-	for c in cfg['calendars']['calendar']:
-		reconfigure_gcal_entry(c)
+			# Delete Domoticz devices
+			payload = dict([('type', 'deletedevice'), ('idx', c['domoticzSwitchIdx'])])
+			r = domoticzAPI(payload)
+			payload = dict([('type', 'deletedevice'), ('idx', c['domoticzTextIdx'])])
+			r = domoticzAPI(payload)
+			# Delete Domoticz user variables
+			payload = dict([('type', 'command'), ('param', 'deleteuservariable'), ('idx', c['domoticzUVEventsTodayIdx'])])
+			r = domoticzAPI(payload)
+			payload = dict([('type', 'command'), ('param', 'deleteuservariable'), ('idx', c['domoticzUVRemainingEventsTodayIdx'])])
+			r = domoticzAPI(payload)
+			payload = dict([('type', 'command'), ('param', 'deleteuservariable'), ('idx', c['domoticzUVTrippedEventIdx'])])
+			r = domoticzAPI(payload)
 
+	sys.exit(0)
 	saveConfigFile()
-
+	load_config()
 	print '\nGCal has been reconfigured'
 
 
@@ -1336,6 +1346,7 @@ def main(argv):
 
 	if reConfigure and tty:
 		reconfigure_gcal()
+		sys.exit(0)
 
 	list_calendars()
 	sys.exit(0)
