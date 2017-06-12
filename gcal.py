@@ -34,7 +34,7 @@ newDevicesList = [] # This is a python list
 APPLICATION_NAME = 'Google Calendar API for Domoticz'
 
 SCOPES = 'https://www.googleapis.com/auth/calendar.readonly'
-VERSION = '0.9.0'
+VERSION = '0.9.1'
 DB_VERSION = '1.0.1'
 MSG_ERROR = 'Error'
 MSG_INFO = 'Info'
@@ -155,6 +155,12 @@ def enterConfigDomoticzTextDevEndTimeFmt():
 	defaultVal = cfg['domoticz']['textDevEndTimeFmt'] if cfg['domoticz']['textDevEndTimeFmt'] != '' else '%H:%M'
 	cfg['domoticz']['textDevEndTimeFmt'] = default_input('Domoticz text device End Time format', defaultVal)
 
+def enterConfigDomoticzTextDevAllDayEventFmt():
+	global cfg
+	if not 'textDevAllDayEventFmt' in cfg['domoticz']: cfg['domoticz']['textDevAllDayEventFmt'] = ''
+	defaultVal = cfg['domoticz']['textDevAllDayEventFmt'] if cfg['domoticz']['textDevAllDayEventFmt'] != '' else '%Y-%m-%d. (All day event)'
+	cfg['domoticz']['textDevAllDayEventFmt'] = default_input('Domoticz text device All Day Event format', defaultVal)
+
 def enterConfigDomoticzHostName():
 	global cfg
 	import socket
@@ -254,6 +260,7 @@ def create_config():
 	enterConfigDomoticzTimeZone()
 	enterConfigDomoticzTextDevStartTimeFmt()
 	enterConfigDomoticzTextDevEndTimeFmt()
+	enterConfigDomoticzTextDevAllDayEventFmt()
 	enterConfigDomoticzHostName()
 	enterConfigDomoticzPortNumber()
 	enterConfigDomoticzProtocol()
@@ -1241,6 +1248,7 @@ def reconfigure_gcal():
 		enterConfigDomoticzTimeZone()
 		enterConfigDomoticzTextDevStartTimeFmt()
 		enterConfigDomoticzTextDevEndTimeFmt()
+		enterConfigDomoticzTextDevAllDayEventFmt()
 		enterConfigDomoticzHostName()
 		enterConfigDomoticzPortNumber()
 		enterConfigDomoticzProtocol()
