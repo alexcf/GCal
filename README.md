@@ -1,7 +1,5 @@
 [![GPL-3.0](https://img.shields.io/badge/license-GPL-blue.svg)]()
 
-## Status: Work in Progress
-
 # GCal
 Retrieves data from multiple Google Calendars and updates Domoticz based on the events.
 
