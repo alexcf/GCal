@@ -179,11 +179,11 @@ def enterConfigDomoticzPortNumber():
 	goodInput = False
 	while not goodInput:
 		try:
-			cfg['domoticz']['portNumber'] = default_input('Domoticz web interface port number', defaultVal)
+			cfg['domoticz']['portNumber'] = int(default_input('Domoticz web interface port number', defaultVal))
 			if cfg['domoticz']['portNumber'] > 0 and cfg['domoticz']['portNumber'] < 65536:
 				goodInput = True
 			else:
-				print("That's not a valid port number. Try again: ")
+				print(cfg['domoticz']['portNumber'] + " is not a valid port number. Try again: ")
 		except ValueError:
 			print('That\'s not an integer. Try again: ')
 
@@ -1146,10 +1146,12 @@ def process_calendar(c, g, googleCalStateEntry, gcalStateEntry):
 		eventInfoText = trippedEvent
 
 	if not tripped:
-		format1 = '<span style="color: grey;">' # Future events are shown in grey
-		format2 = '</span>'
+		format1 = '' #<span style="color: grey;">' # Future events are shown in grey
+		format2 = ''#</span>'
 	eventInfoText = format1 + eventInfoText + ' ' + seqText + format2
-	if eventTimeText != '': eventInfoText = eventInfoText + '<BR/><span style="font-weight: normal;">' + eventTimeText + '</span>'
+	#if eventTimeText != '': eventInfoText = eventInfoText + '<BR/><span style="font-weight: normal;">' + eventTimeText + '</span>'
+
+	# We seem to have come to a point where we can not use formatting in text devices... This needs to be solved.
 
 	updateDomoUserVars(c, eventsToday, remainingEventsToday, trippedEvent)
 	updateDomoTextDevice(c, eventInfoText)
@@ -1349,7 +1351,7 @@ def main(argv):
 	msgProgInfo += ' (DB version ' + cfg['GCal']['dbVersion'] + ')'
 
 	msgProgInfo += ' running on TTY console...' if tty else ' running as a CRON job...'
-	logToDomoticz(MSG_EXEC, msgProgInfo)
+	if isDebug: logToDomoticz(MSG_EXEC, msgProgInfo)
 	if isVerbose: print msgProgInfo
 
 	if reConfigure and tty:
